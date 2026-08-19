@@ -32,6 +32,8 @@ set(APP_SOURCES
     src/util/io_bytes.c
     src/util/io_crc.c
     src/storage/config_store.c
+    src/modbus/regmap.c
+    src/sys/app_stubs.c
 )
 set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/src
