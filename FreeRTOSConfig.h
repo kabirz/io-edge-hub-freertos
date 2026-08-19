@@ -45,5 +45,8 @@
 /* SysTick 归 FreeRTOS：把内核 tick ISR 映射到 CMSIS 向量名，强符号覆盖启动文件的弱定义。
    HAL 时基走 TIM7（见 src/board/stm32f4xx_hal_timebase_tim.c）。 */
 #define xPortSysTickHandler SysTick_Handler
+/* SVC/PendSV 同理映射到 CMSIS 向量名，否则调度器启动时的向量表 configASSERT 失败。 */
+#define vPortSVCHandler SVC_Handler
+#define xPortPendSVHandler PendSV_Handler
 
 #endif /* FREERTOS_CONFIG_H */
