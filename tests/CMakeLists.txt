@@ -1,0 +1,15 @@
+cmake_minimum_required(VERSION 3.16)
+project(io_host_tests C)
+set(CMAKE_C_STANDARD 11)
+get_filename_component(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/.. ABSOLUTE)
+set(SRC ${REPO_ROOT}/src)
+enable_testing()
+
+function(io_test name)
+  add_executable(${name} ${ARGN})
+  target_include_directories(${name} PRIVATE ${SRC}/include ${SRC} ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_options(${name} PRIVATE -Wall -Wextra -O1)
+  add_test(NAME ${name} COMMAND ${name})
+endfunction()
+
+io_test(test_bytes_crc test_bytes_crc.c ${SRC}/util/io_bytes.c ${SRC}/util/io_crc.c)

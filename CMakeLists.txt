@@ -29,6 +29,8 @@ set(APP_SOURCES
     src/board/board.c
     src/board/stm32f4xx_hal_timebase_tim.c
     src/sys/syscalls.c
+    src/util/io_bytes.c
+    src/util/io_crc.c
 )
 set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/src
