@@ -24,3 +24,11 @@ io_test(test_regmap test_regmap.c fake_flash.c
 target_compile_definitions(test_regmap PRIVATE
   FW_VERSION_MAJOR=0 FW_VERSION_MINOR=3 FW_VERSION_PATCH=0
   FW_GIT_VERSION="\"test\"")
+
+# mb_server: PDU 解码器直连 regmap (版本注入供 regmap.c 的 input_reg[0])
+io_test(test_mb_server test_mb_server.c fake_flash.c
+  ${SRC}/modbus/mb_server.c ${SRC}/modbus/regmap.c ${SRC}/storage/config_store.c
+  ${SRC}/util/io_crc.c ${SRC}/util/io_bytes.c)
+target_compile_definitions(test_mb_server PRIVATE
+  FW_VERSION_MAJOR=0 FW_VERSION_MINOR=3 FW_VERSION_PATCH=0
+  FW_GIT_VERSION="\"test\"")
