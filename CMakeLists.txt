@@ -27,19 +27,25 @@ find_package(FreeRTOS COMPONENTS ARM_CM4F REQUIRED)
 set(APP_SOURCES
     src/main.c
     src/board/board.c
+    src/board/spi.c
     src/board/stm32f4xx_hal_timebase_tim.c
     src/sys/syscalls.c
     src/util/io_bytes.c
     src/util/io_crc.c
     src/storage/config_store.c
+    src/storage/w25qxx.c
+    src/storage/lfs_port.c
     src/modbus/regmap.c
     src/modbus/mb_server.c
     src/sys/app_stubs.c
+    deps/littlefs/lfs.c
+    deps/littlefs/lfs_util.c
 )
 set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/board
     ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/deps/littlefs
     ${CMAKE_BINARY_DIR}/generated
 )
 

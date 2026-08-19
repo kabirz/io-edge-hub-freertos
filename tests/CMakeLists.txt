@@ -32,3 +32,12 @@ io_test(test_mb_server test_mb_server.c fake_flash.c
 target_compile_definitions(test_mb_server PRIVATE
   FW_VERSION_MAJOR=0 FW_VERSION_MINOR=3 FW_VERSION_PATCH=0
   FW_GIT_VERSION="\"test\"")
+
+# lfs_port: littlefs 移植层, RAM 假件上挂载/读写/脏分区恢复。
+# littlefs 本体 (deps/littlefs) 可直接 host 编译; LFS_PORT_TEST_SMALL 把
+# 分区缩到 256 KiB (假件仅 1 MiB), LFS_OFFSET 仍为真实值。
+io_test(test_lfs_port test_lfs_port.c fake_flash.c
+  ${SRC}/storage/lfs_port.c
+  ${REPO_ROOT}/deps/littlefs/lfs.c ${REPO_ROOT}/deps/littlefs/lfs_util.c)
+target_include_directories(test_lfs_port PRIVATE ${REPO_ROOT}/deps/littlefs)
+target_compile_definitions(test_lfs_port PRIVATE LFS_PORT_TEST_SMALL)

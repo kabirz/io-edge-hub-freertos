@@ -10,6 +10,7 @@
  */
 
 #include "io_hooks.h"
+#include "io_watchdog.h"
 
 __attribute__((weak)) void mb_set_do(uint16_t val)
 {
@@ -45,5 +46,15 @@ __attribute__((weak)) void io_lock(void)
 }
 
 __attribute__((weak)) void io_unlock(void)
+{
+}
+
+/* watchdog: 真实 IWDG 实现在 sys/watchdog 任务 (Task 13) 落地,
+ * 同名强符号自动覆盖; lfs_port/w25qxx 已按本接口喂狗 */
+__attribute__((weak)) void watchdog_init(void)
+{
+}
+
+__attribute__((weak)) void watchdog_feed(void)
 {
 }
