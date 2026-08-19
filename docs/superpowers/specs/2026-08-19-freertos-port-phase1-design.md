@@ -28,7 +28,7 @@ FreeRTOS 实现与现有 release 固件对等的核心功能，**对外协议与
 | D2 | 启动/升级 | 无 bootloader，app 从 0x08000000 直跑，SWD 烧录 |
 | D3 | FTP | 第一期不纳入 |
 | D4 | 依赖引入 | git submodule 浅克隆 |
-| D5 | CAN 业务帧推送 | 纳入第一期 |
+| D5 | CAN | 纳入第一期。源码核查后修正范围：现版固件**没有** CAN 周期推送（`mod_can_send()` 无调用者，RX 匹配帧仅静默消费）。按行为对齐原则实现：bxCAN 按配置波特率初始化 + RX 过滤业务 ID 帧静默消费 + 提供 `mod_can_send()` API，无周期推送 |
 | D6 | 工具链 | 复用 Zephyr SDK 0.17.0 的 arm-zephyr-eabi GCC 12.2（`STM32_TARGET_TRIPLET` 覆盖）；如 newlib 与 stm32-cmake 不兼容则回退 xpack arm-none-eabi |
 
 ## 2. 功能范围（第一期）
@@ -45,7 +45,7 @@ FreeRTOS 实现与现有 release 固件对等的核心功能，**对外协议与
 - **IO**：16 路_DI（采样周期由保持寄存器 0x03 配置，10ms–5s，默认 200ms）、
   8 路 DO + 8 路 DO 指示灯（跟随）、4 路 AI（12bit，PC0–PC3，系数 7414/3704）、
   网络断开时 DO 安全清零。
-- **CAN 业务帧**：DI/AI/DO 状态按可配 ID（默认 0x111）周期推送，波特率可配（50–1000k）。
+- **CAN**：按配置波特率（reg 0x07，合法集合 {50,100,125,250,500,800,1000}×1000，否则回退 250k）初始化 bxCAN；RX 硬件过滤业务 ID（reg 0x06，默认 0x0111）帧并静默消费（对齐现版）；提供 `mod_can_send()` 发送 API；无周期推送（源码核查：现版无此行为）。
 - **系统**：IWDG 30s（调试挂起时暂停）、RTC（LSE）+ 时间设置、状态灯心跳 300/2700ms、
   延迟重启（RTC 备份寄存器存标志）、恢复出厂（擦除配置与历史区后重启）、
   MAC 由 STM32 UID 派生（OUI 00:08:DC）、静态 IPv4（IP 来自保持寄存器）。
@@ -147,7 +147,10 @@ io-edge-hub-freertos/
 - **Socket 池**（共 8 个，第一期用 4）：UDP 配置 ×1、Modbus TCP 监听 ×1、
   Modbus TCP 已连接客户端 ×2。池由 `net/w5500.c` 集中分配，未来 FTP/Web 预留 4 个。
 - 缓冲区默认 2KB/socket（16KB/32KB），Modbus 数据 socket 可调 4KB。
-- TCP keepalive：accepted socket 写 `Sn_KPALVTR=6`（30s）。
+- TCP keepalive：accepted socket 写 `Sn_KPALVTR=6`（30s）。**已知偏差（记录）**：
+  (1) W5500 为单一硬件定时探测，现版 Zephyr 为 30s 空闲 + 5s 间隔 × 3 次探测，
+  探测节奏略有差异；(2) Modbus TCP 并发客户端上限 2（W5500 socket 硬约束；
+  现版为动态链表无上限）。
 - Modbus TCP 用每 socket 非阻塞状态机轮询（不用 select）。
 - 静态 IP：UID→MAC 写 SHAR；IP 写 SIPR（来源：保持寄存器 4 个八位组）；
   掩码/网关写 SUBR/GAR（取值方式以 Zephyr 版 `main.c` 为准）。
@@ -180,9 +183,7 @@ io-edge-hub-freertos/
 - `time.c`：RTC ↔ 应用 epoch，SET_TIME/寄存器时间戳共用；日志时间戳取自此处。
 - `watchdog.c`：IWDG 30s，`__DBGMCU_FREEZE_IWDG`（调试挂起暂停）。
 - `log.c`：printf 风格到 USART1，带 RTC 时间戳，级别编译期裁剪（release 关闭）。
-- `reboot.c`：`NVIC_SystemReset`；延迟重启用 RTC 备份寄存器存标志（对应 Zephyr 版
-  retained 语义）；恢复出厂的具体动作范围（是否连历史区一起清）以 Zephyr 版
-  `function.c` 实现为准，移植时对齐。
+- `reboot.c`：`NVIC_SystemReset`；延迟重启标志为普通 RAM `volatile bool`（源码核查：现版即如此，非备份寄存器）；恢复出厂 = 仅擦除配置区 A/B 两槽（对齐现版只擦 FCB `storage_partition`，**不清历史文件**），随后 `history_sync()` + 100ms + 冷重启。
 - 版本：构建时由 CMake 读 `VERSION` + `git describe` 生成 `fw_version.h`。
 
 ## 7. 数据流（与 Zephyr 版一致）
