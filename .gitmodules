@@ -1,0 +1,15 @@
+[submodule "deps/stm32-cmake"]
+	path = deps/stm32-cmake
+	url = https://github.com/ObKo/stm32-cmake
+[submodule "deps/FreeRTOS-Kernel"]
+	path = deps/FreeRTOS-Kernel
+	url = https://github.com/FreeRTOS/FreeRTOS-Kernel
+[submodule "deps/littlefs"]
+	path = deps/littlefs
+	url = https://github.com/littlefs-project/littlefs
+[submodule "deps/ioLibrary"]
+	path = deps/ioLibrary
+	url = https://github.com/Wiznet/ioLibrary_Driver
+[submodule "deps/STM32CubeF4"]
+	path = deps/STM32CubeF4
+	url = https://github.com/STMicroelectronics/STM32CubeF4

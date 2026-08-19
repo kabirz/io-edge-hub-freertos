@@ -1,1 +1,8 @@
-.superpowers/  
+.superpowers/
+build/
+build-host/
+*.elf
+*.hex
+*.bin
+*.map
+*.log
