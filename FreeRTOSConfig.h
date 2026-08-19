@@ -41,6 +41,9 @@
 #define INCLUDE_xTaskGetTickCount    1
 #define INCLUDE_vTaskSuspend         1
 #define INCLUDE_xQueueGetMutexHolder 1
+#define INCLUDE_xTaskGetSchedulerState 1 /* net/w5500.c CRIS 回调用:
+   调度器未启动时跳过临界区 (单线程无需保护; 且此时 taskENTER/EXIT
+   因 uxCriticalNesting 魔数语义不配对, 会永久掩蔽中断) */
 
 /* SysTick 归 FreeRTOS：把内核 tick ISR 映射到 CMSIS 向量名，强符号覆盖启动文件的弱定义。
    HAL 时基走 TIM7（见 src/board/stm32f4xx_hal_timebase_tim.c）。 */

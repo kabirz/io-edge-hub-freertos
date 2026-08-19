@@ -39,9 +39,13 @@ set(APP_SOURCES
     src/history/history_file.c
     src/modbus/regmap.c
     src/modbus/mb_server.c
+    src/net/w5500.c
     src/sys/app_stubs.c
     deps/littlefs/lfs.c
     deps/littlefs/lfs_util.c
+    deps/ioLibrary/Ethernet/wizchip_conf.c
+    deps/ioLibrary/Ethernet/W5500/w5500.c
+    deps/ioLibrary/Ethernet/socket.c
 )
 set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -49,6 +53,10 @@ set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/include
     ${CMAKE_CURRENT_SOURCE_DIR}/deps/littlefs
     ${CMAKE_BINARY_DIR}/generated
+    # 仅 Ethernet 根上路径: "wizchip_conf.h"/"socket.h" 直名包含;
+    # ioLibrary 的 w5500.h 只经 "W5500/w5500.h" 路径限定访问,
+    # 未限定 "w5500.h" 一律解析到 src/include (本模块对外头)。
+    ${CMAKE_CURRENT_SOURCE_DIR}/deps/ioLibrary/Ethernet
 )
 
 add_executable(fw.elf ${APP_SOURCES} stm32f4xx_hal_conf.h)
@@ -58,6 +66,16 @@ set_target_properties(fw.elf PROPERTIES OUTPUT_NAME fw)
 
 target_include_directories(fw.elf PRIVATE ${APP_INCLUDES})
 target_compile_options(fw.elf PRIVATE -Wall -Wextra)
+# ioLibrary 选型: W5500, SPI 模式 (wizchip_conf.h 默认 _WIZCHIP_=W6300)
+target_compile_definitions(fw.elf PRIVATE _WIZCHIP_=5500)
+# ioLibrary 上游不按本项目 -Wall -Wextra 级别维护, 仅这些文件关警告
+# (GCC 用 -w 全关, 排在 -Wall -Wextra 之后生效)
+set_source_files_properties(
+    deps/ioLibrary/Ethernet/wizchip_conf.c
+    deps/ioLibrary/Ethernet/W5500/w5500.c
+    deps/ioLibrary/Ethernet/socket.c
+    PROPERTIES COMPILE_OPTIONS "-w"
+)
 target_link_libraries(fw.elf PRIVATE
     FreeRTOS::ARM_CM4F
     FreeRTOS::Heap::4

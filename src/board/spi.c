@@ -2,8 +2,12 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * SPI 外设初始化。SPI1 (W25Q128 NOR): APB2 84 MHz, 预分频 /2 = 42 MHz
+ * SPI 外设初始化。
+ * SPI1 (W25Q128 NOR): APB2 84 MHz, 预分频 /2 = 42 MHz
  * (W25Q128 0x03 读命令上限 50 MHz); 软件 CS PA4 推挽、初始高。
+ * SPI2 (W5500 以太网): APB1 42 MHz, 预分频 /2 = 21 MHz (W5500 SPI 上限
+ * 33.3 MHz, 板走线按 21 MHz 设计); 软件 CS PB12 推挽、初始高。
+ * 均为主机全双工、模式 0 (CPOL=0/CPHA=1EDGE)、8bit MSB, 轮询收发。
  */
 
 #include "spi.h"
@@ -53,11 +57,33 @@ void spi1_init(void)
     if (HAL_SPI_Init(&hspi1) != HAL_OK) { Error_Handler(); }
 }
 
+static void spi2_gpio_init(void)
+{
+    GPIO_InitTypeDef io = {0};
+
+    /* W5500 软件 CS: 推挽输出, 空闲高 (未选中)。ioLibrary 侧逐操作
+     * 拉低/拉高 (net/w5500.c 的 CS 回调引用本宏)。 */
+    io.Pin = SPI2_W5500_CS_PIN;
+    io.Mode = GPIO_MODE_OUTPUT_PP;
+    io.Pull = GPIO_NOPULL;
+    io.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    HAL_GPIO_Init(SPI2_W5500_CS_PORT, &io);
+    HAL_GPIO_WritePin(SPI2_W5500_CS_PORT, SPI2_W5500_CS_PIN, GPIO_PIN_SET);
+
+    /* PB13 SCK / PB14 MISO / PB15 MOSI, AF5 SPI2 */
+    io.Pin = GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15;
+    io.Mode = GPIO_MODE_AF_PP;
+    io.Pull = GPIO_NOPULL;
+    io.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    io.Alternate = GPIO_AF5_SPI2;
+    HAL_GPIO_Init(GPIOB, &io);
+}
+
 void spi2_init(void)
 {
-    /* 外设级配置 (APB1 42 MHz, /2 = 21 MHz); 引脚/使用方在任务 9 定义,
-     * 届时补 GPIO AF 部分。当前无人调用。 */
-    __HAL_RCC_SPI2_CLK_ENABLE();
+    __HAL_RCC_SPI2_CLK_ENABLE();    /* GPIOB 时钟 board_init 已开 */
+
+    spi2_gpio_init();
 
     hspi2.Instance = SPI2;
     hspi2.Init.Mode = SPI_MODE_MASTER;
