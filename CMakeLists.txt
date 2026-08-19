@@ -26,10 +26,13 @@ find_package(FreeRTOS COMPONENTS ARM_CM4F REQUIRED)
 
 set(APP_SOURCES
     src/main.c
+    src/board/board.c
+    src/board/stm32f4xx_hal_timebase_tim.c
     src/sys/syscalls.c
 )
 set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/board
     ${CMAKE_CURRENT_SOURCE_DIR}/src/include
     ${CMAKE_BINARY_DIR}/generated
 )
@@ -55,6 +58,7 @@ target_link_libraries(fw.elf PRIVATE
     HAL::STM32::F4::IWDG
     HAL::STM32::F4::RTC
     HAL::STM32::F4::TIM
+    HAL::STM32::F4::TIMEx
     HAL::STM32::F4::PWR
     CMSIS::STM32::F407VE
     STM32::NoSys

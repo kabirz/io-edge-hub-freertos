@@ -42,4 +42,8 @@
 #define INCLUDE_vTaskSuspend         1
 #define INCLUDE_xQueueGetMutexHolder 1
 
+/* SysTick 归 FreeRTOS：把内核 tick ISR 映射到 CMSIS 向量名，强符号覆盖启动文件的弱定义。
+   HAL 时基走 TIM7（见 src/board/stm32f4xx_hal_timebase_tim.c）。 */
+#define xPortSysTickHandler SysTick_Handler
+
 #endif /* FREERTOS_CONFIG_H */

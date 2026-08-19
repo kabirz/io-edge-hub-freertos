@@ -1,6 +1,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "main.h"
+#include "board.h"
 #include "fw_version.h"
 
 UART_HandleTypeDef huart1;
@@ -33,19 +34,28 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
     NVIC_SystemReset(); /* 对齐 Zephyr k_sys_fatal_error_handler: 栈溢出 -> 热重启 */
 }
 
-static void hello_task(void *arg)
+static void heartbeat_task(void *arg)
 {
     (void)arg;
-    for (;;) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+    GPIO_InitTypeDef io = {0};
+    io.Pin = STATUS_LED_PIN; io.Mode = GPIO_MODE_OUTPUT_PP; io.Pull = GPIO_NOPULL; io.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(STATUS_LED_PORT, &io);
+    for (;;) {
+        HAL_GPIO_WritePin(STATUS_LED_PORT, STATUS_LED_PIN, GPIO_PIN_SET);
+        vTaskDelay(pdMS_TO_TICKS(300));
+        HAL_GPIO_WritePin(STATUS_LED_PORT, STATUS_LED_PIN, GPIO_PIN_RESET);
+        vTaskDelay(pdMS_TO_TICKS(2700));
+    }
 }
 
-static StackType_t hello_stack[256];
-static StaticTask_t hello_tcb;
+static StackType_t hb_stack[256];
+static StaticTask_t hb_tcb;
 
 int main(void)
 {
     HAL_Init();
-    xTaskCreateStatic(hello_task, "hello", 256, NULL, 1, hello_stack, &hello_tcb);
+    board_init();
+    xTaskCreateStatic(heartbeat_task, "hb", 256, NULL, 1, hb_stack, &hb_tcb);
     vTaskStartScheduler();
     for (;;) {}
 }
