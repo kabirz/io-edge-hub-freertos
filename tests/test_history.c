@@ -169,10 +169,14 @@ int main(void)
         fake_now = T1; /* new file name > all data_0101_* names */
         write_di(7, 8, 9);
         hist_file_sync();
-        /* cleanup trims the 12 committed files to 10 (removes the 2
-         * lexicographically smallest); the brand-new file itself is not
-         * yet committed when the scan runs (littlefs lazy dirent commit,
-         * same underneath Zephyr) -> 11 files on disk afterwards */
+        /* littlefs 2.11 commits the CREATE dirent eagerly at
+         * lfs_file_open, so cleanup's scan sees all 13 dirents (12
+         * seeds + the new file, which has the trailing readdir id).
+         * The names array holds only HIST_MAX_FILES+2 = 12 entries, so
+         * the 13th (the new file) is dropped from the collection;
+         * cleanup removes the 2 lexicographically smallest of the 12
+         * collected seeds -> 10 seeds + the new file = 11 on disk.
+         * Zephyr's names[HIST_MAX_FILES+2] cap behaves identically. */
         TEST_EQ_INT(count_data_files(), 11);                 /* 12 - 2 + 1 */
         TEST_EQ_INT(file_size("data_0101_000001.raw"), -1);  /* dropped */
         TEST_EQ_INT(file_size("data_0101_000002.raw"), -1);  /* dropped */
