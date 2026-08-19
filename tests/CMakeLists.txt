@@ -41,3 +41,12 @@ io_test(test_lfs_port test_lfs_port.c fake_flash.c
   ${REPO_ROOT}/deps/littlefs/lfs.c ${REPO_ROOT}/deps/littlefs/lfs_util.c)
 target_include_directories(test_lfs_port PRIVATE ${REPO_ROOT}/deps/littlefs)
 target_compile_definitions(test_lfs_port PRIVATE LFS_PORT_TEST_SMALL)
+
+# history: 纯文件核心 (history_file.c) 直测 — DI/AI 字节布局、4096B 轮转、
+# 保留 10 份清理、close 续写、重启续写字典序最大文件。history.c (FreeRTOS
+# 队列/任务壳) 不参与 host 链接。HIST_FILE_MAX 缩到 4096 让轮转可触发。
+io_test(test_history test_history.c fake_flash.c
+  ${SRC}/history/history_file.c ${SRC}/storage/lfs_port.c
+  ${REPO_ROOT}/deps/littlefs/lfs.c ${REPO_ROOT}/deps/littlefs/lfs_util.c)
+target_include_directories(test_history PRIVATE ${REPO_ROOT}/deps/littlefs)
+target_compile_definitions(test_history PRIVATE LFS_PORT_TEST_SMALL HIST_FILE_MAX=4096)

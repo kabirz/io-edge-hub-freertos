@@ -35,6 +35,8 @@ set(APP_SOURCES
     src/storage/config_store.c
     src/storage/w25qxx.c
     src/storage/lfs_port.c
+    src/history/history.c
+    src/history/history_file.c
     src/modbus/regmap.c
     src/modbus/mb_server.c
     src/sys/app_stubs.c
