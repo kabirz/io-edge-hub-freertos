@@ -9,6 +9,9 @@
  * 寄存器后端是 regmap.c (Task 5): Zephyr 的 modbus_user_callbacks
  * (io_modbus_cbs 表) 在此直接映射为 io_read_holding / io_write_holding /
  * io_write_do_bit / io_coil_rd / io_discrete_rd / get_input_reg 调用。
+ *
+ * FP 扩展区 (地址 >= 5000) 同 Zephyr: 仅 FC03/04/16 走 FP 分支且 fp
+ * 回调为 NULL -> 异常 0x01; FC06 无 FP 分支, 走整数写回调越界 -> 0x02。
  */
 
 #ifndef MB_SERVER_H

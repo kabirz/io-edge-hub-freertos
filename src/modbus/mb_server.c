@@ -17,7 +17,8 @@
  *     coil_wr          -> io_write_do_bit
  *     discrete_input_rd-> io_discrete_rd
  *   - CONFIG_MODBUS_FP_EXTENSIONS=y 但 fp 回调为 NULL: 地址 >= 5000 的
- *     FC03/04/06/16 一律异常 0x01 (ILLEGAL_FC), 无浮点路径
+ *     FC03/04/16 一律异常 0x01 (ILLEGAL_FC), 无浮点路径; FC06 无 FP
+ *     分支 (Zephyr 同款), 走整数回调越界 -> 异常 0x02
  *   - mbs_try_user_fc 自定义 FC 表为空: 未知 FC -> 0x01
  *   - 出错码 -ENOTSUP -> -1
  *
@@ -391,6 +392,7 @@ static bool fc05_coil_write(const uint8_t *d, uint16_t dlen,
 /* FC06 (0x06) Write Single Register
  *
  * Request/Response: fc | 寄存器地址(2) | 寄存器值(2)
+ * 无 FP 分支 (Zephyr 同款): addr >= 5000 走整数写回调, 越界 -> 0x02
  */
 static bool fc06_hreg_write(const uint8_t *d, uint16_t dlen,
 			    uint8_t *out, uint16_t *out_len)
@@ -403,13 +405,6 @@ static bool fc06_hreg_write(const uint8_t *d, uint16_t dlen,
 
 	reg_addr = io_get_be16(&d[0]);
 	reg_val = io_get_be16(&d[2]);
-
-	/* FP 扩展区 (控制器决议: 与 FC03/04/16 一律 0x01 对齐;
-	 * 上游 Zephyr 的 FC06 无 FP 分支, 会走整数路径得到 0x02) */
-	if (reg_addr >= MB_FP_EXTENSIONS_ADDR) {
-		return exc_rsp(MB_FC06_HOLDING_REG_WR, MB_EXC_ILLEGAL_FC,
-			       out, out_len);
-	}
 
 	if (holding_reg_wr_cb(reg_addr, reg_val) != 0) {
 		return exc_rsp(MB_FC06_HOLDING_REG_WR, MB_EXC_ILLEGAL_DATA_ADDR,
@@ -578,9 +573,10 @@ static bool fc16_hregs_write(const uint8_t *d, uint16_t dlen,
 			       out, out_len);
 	}
 
-	/* 字节数须恰为 2*寄存器数 (控制器决议: 收紧 Zephyr 的
-	 * num_bytes/reg_qty != 2 整除判断, 拒绝尾部多余字节) */
-	if (num_bytes != (uint16_t)(2 * reg_qty)) {
+	/* 字节数整除判断 (Zephyr: num_bytes/reg_qty != 2 -> 0x03,
+	 * 整数除法: 尾部多余字节通过, 如 qty=2/nbytes=5; reg_qty>=1
+	 * 已由上面的数量门保证) */
+	if ((uint16_t)(num_bytes / reg_qty) != 2) {
 		return exc_rsp(MB_FC16_HOLDING_REGS_WR, MB_EXC_ILLEGAL_DATA_VAL,
 			       out, out_len);
 	}
