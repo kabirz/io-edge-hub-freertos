@@ -13,3 +13,5 @@ function(io_test name)
 endfunction()
 
 io_test(test_bytes_crc test_bytes_crc.c ${SRC}/util/io_bytes.c ${SRC}/util/io_crc.c)
+io_test(test_config_store test_config_store.c fake_flash.c
+  ${SRC}/storage/config_store.c ${SRC}/util/io_crc.c ${SRC}/util/io_bytes.c)

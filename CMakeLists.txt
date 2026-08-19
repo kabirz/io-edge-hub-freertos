@@ -31,6 +31,7 @@ set(APP_SOURCES
     src/sys/syscalls.c
     src/util/io_bytes.c
     src/util/io_crc.c
+    src/storage/config_store.c
 )
 set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/src
