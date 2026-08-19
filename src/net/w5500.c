@@ -64,6 +64,24 @@ static volatile bool link_up;   /* 监控任务缓存 */
  * sn_alloc 仅在 >= SN_POOL_BASE 中取。短临界区, 无阻塞。 */
 static uint8_t sn_free_map = (uint8_t)~((1u << SN_POOL_BASE) - 1u);
 
+/* 临界区门控: 调度器未启动时 (main 先行 init 阶段) 单线程无并发, 跳过
+ * taskENTER/EXIT_CRITICAL (与下方 wiz_cris_enter/exit 同一门控) --
+ * 否则 uxCriticalNesting 魔数语义下 enter/exit 不配对会永久掩蔽
+ * BASEPRI, 死锁。 */
+static void pool_crit_enter(void)
+{
+	if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) {
+		taskENTER_CRITICAL();
+	}
+}
+
+static void pool_crit_exit(void)
+{
+	if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) {
+		taskEXIT_CRITICAL();
+	}
+}
+
 int sn_alloc(uint8_t *sn)
 {
 	int ret = -1;
@@ -71,7 +89,7 @@ int sn_alloc(uint8_t *sn)
 	if (sn == NULL) {
 		return -1;
 	}
-	taskENTER_CRITICAL();
+	pool_crit_enter();
 	for (uint8_t i = SN_POOL_BASE; i < _WIZCHIP_SOCK_NUM_; i++) {
 		if (sn_free_map & (uint8_t)(1u << i)) {
 			sn_free_map &= (uint8_t)~(uint8_t)(1u << i);
@@ -80,7 +98,7 @@ int sn_alloc(uint8_t *sn)
 			break;
 		}
 	}
-	taskEXIT_CRITICAL();
+	pool_crit_exit();
 	return ret;
 }
 
@@ -89,9 +107,9 @@ void sn_free(uint8_t sn)
 	if (sn < SN_POOL_BASE || sn >= _WIZCHIP_SOCK_NUM_) {
 		return; /* 预留段/越界: 归还无意义, 忽略 */
 	}
-	taskENTER_CRITICAL();
+	pool_crit_enter();
 	sn_free_map |= (uint8_t)(1u << sn);
-	taskEXIT_CRITICAL();
+	pool_crit_exit();
 }
 
 /* ==================== ioLibrary SPI 回调 (SPI2 轮询) ==================== */
@@ -124,6 +142,8 @@ static void wiz_cs_deselect(void)
 	HAL_GPIO_WritePin(SPI2_W5500_CS_PORT, SPI2_W5500_CS_PIN, GPIO_PIN_SET);
 }
 
+/* HAL_GetTick 在 BASEPRI 屏蔽下冻结 (TIM7 tick 中断优先级 15), 故
+ * CRIS 段内 HAL SPI 超时永远不会到期 -- 良性 (轮询完成即返回), 记录在案 */
 static uint8_t wiz_spi_readbyte(void)
 {
 	uint8_t v = 0;
