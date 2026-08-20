@@ -40,7 +40,9 @@
 #include "io_hooks.h"
 #include "io_bytes.h"
 #include "config_store.h"
+#ifndef FW_GIT_VERSION /* host 测试通过 tests/fw_version.h 提供; target 通过 build/generated/fw_version.h */
 #include "fw_version.h"
+#endif
 
 #include "log.h"
 
@@ -196,15 +198,28 @@ uint16_t udp_app_cmd(uint8_t cmd, const uint8_t *data, uint16_t len,
 
 	case UDP_CMD_GET_VERSION: {
 		/* 对齐 Zephyr FW_CMD_GET_VERSION: 返回版本字符串
-		 * "v<major>.<minor>.<patch>_<git_hash>" (无尾 NUL) */
-		int n = snprintf((char *)&reply[1], cap - 1u, "v%d.%d.%d_%s",
-				  FW_VERSION_MAJOR, FW_VERSION_MINOR,
-				  FW_VERSION_PATCH, FW_GIT_VERSION);
-		if (n < 0 || (uint16_t)n >= cap - 1u) {
+		 * "v<major>.<minor>.<patch>_<git_hash>" (无尾 NUL)。
+		 * 局部 const 数组中转 FW_GIT_VERSION, 避免 MSVC 宏展开问题。 */
+		const char git_ver[7] = FW_GIT_VERSION;
+		uint16_t pos = 0;
+		if (cap < 2u) {
 			return 0;
 		}
-		reply[0] = cmd;
-		return (uint16_t)(1 + n);
+		reply[pos++] = cmd;
+		reply[pos++] = 'v';
+		if ((uint16_t)(cap - pos) < 1u) { return 0; }
+		reply[pos++] = (char)('0' + FW_VERSION_MAJOR);
+		reply[pos++] = '.';
+		if ((uint16_t)(cap - pos) < 1u) { return 0; }
+		reply[pos++] = (char)('0' + FW_VERSION_MINOR);
+		reply[pos++] = '.';
+		if ((uint16_t)(cap - pos) < 1u) { return 0; }
+		reply[pos++] = (char)('0' + FW_VERSION_PATCH);
+		reply[pos++] = '_';
+		if ((uint16_t)(cap - pos) < 6u) { return 0; }
+		memcpy(&reply[pos], git_ver, 6);
+		pos += 6;
+		return pos;
 	}
 
 	case UDP_CMD_REBOOT:

@@ -75,9 +75,8 @@ target_compile_definitions(test_rtu_frame PRIVATE
 io_test(test_udp_cfg test_udp_cfg.c fake_flash.c
   ${SRC}/net/udp_cfg.c ${SRC}/modbus/regmap.c ${SRC}/storage/config_store.c
   ${SRC}/util/io_crc.c ${SRC}/util/io_bytes.c)
-target_compile_definitions(test_udp_cfg PRIVATE
-  FW_VERSION_MAJOR=0 FW_VERSION_MINOR=3 FW_VERSION_PATCH=0
-  FW_GIT_VERSION="\"test\"")
+# tests/fw_version.h provides all version defines (FW_VERSION_MAJOR/MINOR/PATCH
+# and FW_GIT_VERSION as a proper string literal).
 
 # sys/time: ts_in_range 纯函数边界 (HAL/RTC 部分经 HOST_TEST 分离,
 # 不参与 host 编译; set_timestamp/io_time_init 为 target-only 构建验证)
