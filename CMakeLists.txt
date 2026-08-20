@@ -53,6 +53,7 @@ set(APP_SOURCES
     src/modbus/rtu_frame.c
     src/modbus/rtu.c
     src/net/w5500.c
+    src/net/w5500_macraw.c
     src/net/can.c
     src/net/udp_cfg.c
     src/net/udp_task.c
@@ -134,6 +135,7 @@ set_source_files_properties(
     deps/ioLibrary/Ethernet/wizchip_conf.c
     deps/ioLibrary/Ethernet/W5500/w5500.c
     deps/ioLibrary/Ethernet/socket.c
+    src/net/w5500_macraw.c
     PROPERTIES COMPILE_OPTIONS "-w"
 )
 # LwIP upstream: suppress warnings for vendored sources

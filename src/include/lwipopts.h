@@ -53,7 +53,7 @@
 #define PBUF_POOL_BUFSIZE       1540
 #define PBUF_LINK_HLEN          14
 #define PBUF_ETH_HLEN           14
-#define PBUF_IP_HLEN            40  /* max(IPv4, IPv6) header */
+/* PBUF_IP_HLEN: use LwIP default (20 for IPv4) */
 
 /* ---- TCP ---- */
 #define TCP_MSS                 1460  /* 1500 - 40 (IP+TCP headers) */

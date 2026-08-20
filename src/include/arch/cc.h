@@ -6,8 +6,10 @@
 
 #include <stdint.h>
 
-/* Byte order: little-endian (STM32F407) */
+/* Byte order: little-endian (STM32F407) — skip if already defined by newlib */
+#ifndef BYTE_ORDER
 #define BYTE_ORDER LITTLE_ENDIAN
+#endif
 
 #define LWIP_PROVIDE_ERRNO 1
 #define LWIP_PLATFORM_DIAG(x)
