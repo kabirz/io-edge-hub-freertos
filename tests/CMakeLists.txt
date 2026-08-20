@@ -33,6 +33,15 @@ target_compile_definitions(test_mb_server PRIVATE
   FW_VERSION_MAJOR=0 FW_VERSION_MINOR=3 FW_VERSION_PATCH=0
   FW_GIT_VERSION="\"test\"")
 
+# mbtcp_adu: TCP ADU 层 (MBAP 解析/广播抑制/响应合并) 全帧进出,
+# 内部直连 mb_server+regmap (诊断计数经 FC08 交叉验证)
+io_test(test_mbtcp_adu test_mbtcp_adu.c fake_flash.c
+  ${SRC}/modbus/mbtcp_adu.c ${SRC}/modbus/mb_server.c ${SRC}/modbus/regmap.c
+  ${SRC}/storage/config_store.c ${SRC}/util/io_crc.c ${SRC}/util/io_bytes.c)
+target_compile_definitions(test_mbtcp_adu PRIVATE
+  FW_VERSION_MAJOR=0 FW_VERSION_MINOR=3 FW_VERSION_PATCH=0
+  FW_GIT_VERSION="\"test\"")
+
 # lfs_port: littlefs 移植层, RAM 假件上挂载/读写/脏分区恢复。
 # littlefs 本体 (deps/littlefs) 可直接 host 编译; LFS_PORT_TEST_SMALL 把
 # 分区缩到 256 KiB (假件仅 1 MiB), LFS_OFFSET 仍为真实值。

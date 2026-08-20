@@ -39,6 +39,8 @@ set(APP_SOURCES
     src/history/history_file.c
     src/modbus/regmap.c
     src/modbus/mb_server.c
+    src/modbus/mbtcp_adu.c
+    src/modbus/tcp.c
     src/net/w5500.c
     src/sys/app_stubs.c
     deps/littlefs/lfs.c
@@ -75,6 +77,13 @@ set_source_files_properties(
     deps/ioLibrary/Ethernet/W5500/w5500.c
     deps/ioLibrary/Ethernet/socket.c
     PROPERTIES COMPILE_OPTIONS "-w"
+)
+# tcp.c 包含 ioLibrary socket.h: 上游头声明了 W6x00 专用 static 函数却
+# 不定义 -> -Wunused-function (GCC 在 TU 末尾发出, pragma 包不住)。
+# 仅对本文件关该警告, 其余 -Wall -Wextra 照常。
+set_source_files_properties(
+    src/modbus/tcp.c
+    PROPERTIES COMPILE_OPTIONS "-Wno-unused-function"
 )
 target_link_libraries(fw.elf PRIVATE
     FreeRTOS::ARM_CM4F

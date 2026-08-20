@@ -1,0 +1,149 @@
+/*
+ * test_mbtcp_adu.c - Modbus TCP ADU 层 (src/modbus/mbtcp_adu.c) 主机测试。
+ * 链接 mbtcp_adu.c + mb_server.c + regmap.c + config_store.c + fake_flash.c,
+ * 测试文件内自带 io_hooks.h 全部假件 (test_mb_server.c 同款)。
+ *
+ * 语义基准: Zephyr 版 io-edge-hub src/modbus/tcp.c handle_client()
+ * (MBAP 解析/校验顺序、unit 改写、广播抑制、响应合并)。
+ * 输入完整 ADU 帧 (MBAP 7B + PDU), 断言响应帧全字节 + 返回值 1/0;
+ * 用 FC08 子功能交叉验证诊断计数器上报 (bus/no_resp) 的位置。
+ */
+#include "test_util.h"
+#include "mbtcp_adu.h"
+#include "mb_server.h"
+#include "init.h"
+#include "io_hooks.h"
+
+/* ==================== io_hooks 假件 (与 test_mb_server.c 相同) ==================== */
+
+static uint16_t fake_do_val;
+static int fake_do_calls;
+static bool fake_hist_en;
+static int fake_hist_en_calls;
+static int fake_sync_calls;
+static time_t fake_ts_val;
+static int fake_ts_calls;
+static int fake_reboots;
+static uint32_t fake_time;
+
+void mb_set_do(uint16_t val)       { fake_do_val = val; fake_do_calls++; }
+void history_enable_write(bool en) { fake_hist_en = en; fake_hist_en_calls++; }
+void history_sync(void)            { fake_sync_calls++; }
+bool set_timestamp(time_t t)        { fake_ts_val = t; fake_ts_calls++; return true; }
+void io_reboot_cold(void)          { fake_reboots++; }
+uint32_t io_now_epoch(void)        { return fake_time; }
+void io_lock(void) {}
+void io_unlock(void) {}
+
+/* ==================== ADU 收发辅助 ==================== */
+
+static uint8_t in_buf[300];
+static uint8_t out_buf[300];
+static uint16_t out_len;
+
+/* 输入完整 ADU 帧; srv_unit 恒 0x09 (regmap HOLDING_SLAVE_ID_IDX 上电值) */
+static int process(const uint8_t *adu, uint16_t len)
+{
+    memcpy(in_buf, adu, len);
+    memset(out_buf, 0xAA, sizeof(out_buf)); /* 残留哨兵 */
+    out_len = 0xFFFF;                       /* 静默路径不得触碰 */
+    return mbtcp_adu_process(in_buf, len, out_buf, sizeof(out_buf),
+                             &out_len, 0x09);
+}
+
+/* 应答: 返回 1 + 全字节比对 (MBAP 7B + PDU) + 哨兵未被踩 */
+static void check_rsp(const uint8_t *adu, uint16_t len,
+                      const uint8_t *exp, uint16_t exp_len)
+{
+    TEST_ASSERT(process(adu, len) == 1);
+    TEST_EQ_INT(out_len, exp_len);
+    TEST_EQ_MEM(out_buf, exp, exp_len);
+    TEST_EQ_INT(out_buf[exp_len], 0xAA);
+}
+
+/* 静默: 返回 0 + out_len 未被写 */
+static void check_silent(const uint8_t *adu, uint16_t len)
+{
+    TEST_ASSERT(process(adu, len) == 0);
+    TEST_EQ_INT(out_len, 0xFFFF);
+    TEST_EQ_INT(out_buf[0], 0xAA); /* 输出缓冲未被碰 */
+}
+
+/* 组完整 ADU 帧的复合字面量: trans(2) proto(2) len(2) unit fc pdu[] */
+#define ADU(...) (uint8_t[]){ __VA_ARGS__ }
+
+int main(void)
+{
+    /* ---- 1. 正常 FC03 (trans=0xABCD, unit=1): trans 回显, unit 回显, fc=03 ----
+     * 读 addr 0 qty 2 -> DO=0 / di_en=0xFFFF (regmap 编译期默认值) */
+    check_rsp(ADU(0xAB, 0xCD, 0x00, 0x00, 0x00, 0x06, 0x01,
+                  0x03, 0x00, 0x00, 0x00, 0x02), 13,
+              ADU(0xAB, 0xCD, 0x00, 0x00, 0x00, 0x07, 0x01,
+                  0x03, 0x04, 0x00, 0x00, 0xFF, 0xFF), 13);
+
+    /* ---- 2. unit=0x05 (非广播非从站号): 照常应答, 响应 unit=0x05 ----
+     * (内部改写为 srv_unit=0x09 后处理, 响应不暴露改写) */
+    check_rsp(ADU(0x12, 0x34, 0x00, 0x00, 0x00, 0x06, 0x05,
+                  0x03, 0x00, 0x00, 0x00, 0x01), 13,
+              ADU(0x12, 0x34, 0x00, 0x00, 0x00, 0x05, 0x05,
+                  0x03, 0x02, 0x00, 0x00), 11);
+
+    /* ---- 3. unit=0x00 广播 FC06: 副作用执行 (寄存器已写) 但静默 ---- */
+    check_silent(ADU(0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x00,
+                     0x06, 0x00, 0x03, 0x00, 0x32), 13);
+    TEST_EQ_INT(get_holding_reg(0x03), 0x0032); /* 写入生效 */
+    /* 诊断计数: 广播 -> decoder 计 bus/srv 各 1, 传输层补 no_resp 1。
+     * (先清零, 广播一次, 再读 0x0B/0x0E/0x0F; FC08 读自身各再计 1) */
+    check_rsp(ADU(0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x01,
+                  0x08, 0x00, 0x0A, 0x00, 0x00), 13,
+              ADU(0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x01,
+                  0x08, 0x00, 0x0A, 0x00, 0x00), 12);
+    check_silent(ADU(0x00, 0x02, 0x00, 0x00, 0x00, 0x06, 0x00,
+                     0x03, 0x00, 0x00, 0x00, 0x01), 13);
+    check_rsp(ADU(0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x01,
+                  0x08, 0x00, 0x0B, 0x00, 0x00), 13,
+              ADU(0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x01,
+                  0x08, 0x00, 0x0B, 0x00, 0x02), 12); /* bus: 广播1+本读1 */
+    check_rsp(ADU(0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x01,
+                  0x08, 0x00, 0x0F, 0x00, 0x00), 13,
+              ADU(0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x01,
+                  0x08, 0x00, 0x0F, 0x00, 0x01), 12); /* noresp: 广播1 */
+
+    /* ---- 4. proto_id=0x0001: server-failure 应答 (fc|0x80, code 0x04) ----
+     * trans 回显、proto 归 0、unit 回显原始值 0x07、MBAP len=3;
+     * 不进 decoder (下方 bus 计数验证) */
+    check_rsp(ADU(0xDE, 0xAD, 0x00, 0x01, 0x00, 0x06, 0x07,
+                  0x03, 0x00, 0x00, 0x00, 0x02), 13,
+              ADU(0xDE, 0xAD, 0x00, 0x00, 0x00, 0x03, 0x07,
+                  0x83, 0x04), 9);
+    /* 清零后重发 proto!=0 + 读 bus: 仅 FC08 自身 1 条 (decoder 未被碰) */
+    check_rsp(ADU(0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x01,
+                  0x08, 0x00, 0x0A, 0x00, 0x00), 13,
+              ADU(0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x01,
+                  0x08, 0x00, 0x0A, 0x00, 0x00), 12);
+    TEST_ASSERT(process(ADU(0xDE, 0xAD, 0x00, 0x01, 0x00, 0x06, 0x07,
+                            0x03, 0x00, 0x00, 0x00, 0x02), 13) == 1);
+    check_rsp(ADU(0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x01,
+                  0x08, 0x00, 0x0B, 0x00, 0x00), 13,
+              ADU(0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x01,
+                  0x08, 0x00, 0x0B, 0x00, 0x01), 12); /* bus: 仅本读 1 */
+
+    /* ---- 5. FC03 data 长度违例 (dlen=5): 静默, no_resp 由传输层补 ---- */
+    check_silent(ADU(0xAA, 0xBB, 0x00, 0x00, 0x00, 0x07, 0x02,
+                     0x03, 0x00, 0x00, 0x00, 0x01, 0x00), 14);
+    check_rsp(ADU(0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x01,
+                  0x08, 0x00, 0x0B, 0x00, 0x00), 13,
+              ADU(0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x01,
+                  0x08, 0x00, 0x0B, 0x00, 0x03), 12); /* bus: 违例1+清零读1+本读1 */
+    check_rsp(ADU(0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x01,
+                  0x08, 0x00, 0x0F, 0x00, 0x00), 13,
+              ADU(0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x01,
+                  0x08, 0x00, 0x0F, 0x00, 0x01), 12); /* noresp: 违例1 */
+
+    /* ---- 6. 边界: 帧不足 8B (MBAP+fc) / 广播且长度违例 (仍单次 no_resp) ---- */
+    check_silent(ADU(0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x00), 7);
+    check_silent(ADU(0x00, 0x01, 0x00, 0x00, 0x00, 0x07, 0x00,
+                     0x03, 0x00, 0x00, 0x00, 0x01, 0x00), 14);
+
+    TEST_MAIN_END();
+}
