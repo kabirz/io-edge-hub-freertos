@@ -104,7 +104,17 @@ static void heartbeat_task(void *arg)
 static StackType_t hb_stack[512];
 static StaticTask_t hb_tcb;
 
-/* littlefs 实例: main 静态持有 (挂载后须永久有效), history_init 保存指针 */
+/* boot 任务: 1024 字 = 4096B。全部子系统初始化在调度器启动后的本任务
+ * 里执行 -- CM4F 端口的 uxCriticalNesting 在调度器启动前是 0xAAAAAAAA
+ * 魔数 (port.c:161, 仅 xPortStartScheduler 清零 port.c:442), 预调度器
+ * 阶段任何进出临界区的 FreeRTOS API (互斥锁创建/队列/日志锁) 都会让
+ * vPortExitCritical 的 nesting==0 判断永假, BASEPRI 停在 0x50 --
+ * TIM7 tick (优先级 15) 等中断被永久屏蔽, HAL_Delay 死循环。初始化
+ * 挪到调度器后即恢复正常的临界区语义 (对齐 Zephyr 版 main-as-thread) */
+static StackType_t boot_stack[1024];
+static StaticTask_t boot_tcb;
+
+/* littlefs 实例: boot 任务静态持有 (挂载后须永久有效), history_init 保存指针 */
 static lfs_t lfs;
 
 /* ================================================================
@@ -165,9 +175,8 @@ static void net_setup(void)
     LOG_INF("IP: %u.%u.%u.%u/24", ip[0], ip[1], ip[2], ip[3]);
 
     /* 链路等待 <=5s (Zephyr: k_sem_take(net_link_sem, 5s) 超时继续)。
-     * 本移植调度器启动前无阻塞原语可用, 等价语义: 直接轮询
-     * PHYCFGR.LNK (监控任务同源判据), 100ms x 50 = 5s 上限, 超时 WRN
-     * 继续 (网线未插不永久阻塞) */
+     * 轮询 PHYCFGR.LNK, 100ms x 50 = 5s 上限, 超时 WRN 继续。
+     * boot_task 上下文中调度器已运行, HAL_Delay 由 tick 驱动正常。 */
     for (i = 0; i < 50 && (getPHYCFGR() & PHYCFGR_LNK_ON) == 0; i++) {
         HAL_Delay(100);
     }
@@ -176,15 +185,20 @@ static void net_setup(void)
     }
 }
 
-int main(void)
+/* boot 任务: 调度器启动后执行全部子系统初始化。
+ * 原因: CM4F port 的 uxCriticalNesting 在调度器启动前是 0xAAAAAAAA
+ * (port.c:161), 预调度器阶段任何进出临界区的 FreeRTOS API 都会
+ * 让 vPortExitCritical 的 nesting==0 判断永假, BASEPRI 停在 0x50
+ * 屏蔽 tick 中断, HAL_Delay 死循环。在调度器启动后执行初始化,
+ * 临界区语义正常, BASEPRI 按预期在 nesting==0 时清零。 */
+static void boot_task(void *arg)
 {
+    (void)arg;
     uint32_t now;
 
-    HAL_Init();      /* NVIC 优先级分组 + TIM7 tick (HAL_Delay 就绪) */
-    board_init();    /* 时钟 168MHz + GPIO 端口时钟 */
-    os_init();       /* io_lock 互斥锁, 先于任何任务/持锁路径 */
-    log_init();      /* USART1 日志最先就绪, 后续 init 的 LOG 可见 */
-    io_time_init();  /* LSE+RTC (起振秒级) -> epoch 缓存 + 1Hz 定时器 */
+    os_init();       /* io_lock 互斥锁 */
+    log_init();      /* USART1 日志最先就绪 */
+    io_time_init();  /* LSE+RTC -> epoch 缓存 + 1Hz 定时器 */
 
     /* 开机 banner (对齐 Zephyr main: 构建时间/板名/容量/版本) */
     LOG_INF("build time: %s %s", __DATE__, __TIME__);
@@ -196,41 +210,44 @@ int main(void)
 
     /* ---- 存储链: NOR -> config -> holding_reg -> littlefs -> 历史 ---- */
     if (w25qxx_init() != 0) {
-        LOG_ERR("W25Qxx init failed"); /* 继续: config/lfs 各自失败降级 */
+        LOG_ERR("W25Qxx init failed");
     }
+
     if (config_store_init(w25qxx_flash()) != 0) {
         LOG_WRN("config store load failed, factory defaults");
     }
+
     holding_reg_load();
 
-    /* 时间戳影子寄存器刷新 (Zephyr settings/init.c 的 load 后步骤):
-     * RTC epoch 写 0x0E/0x0F 影子; 主站 FC03/UDP 走 io_read_holding
-     * 取实时值, 影子保证非实时读路径一致 */
+
+    /* 时间戳影子寄存器刷新 (Zephyr settings/init.c 的 load 后步骤) */
     now = io_now_epoch();
     update_holding_reg(HOLDING_TIMESTAMP_HI_IDX, (uint16_t)(now >> 16));
     update_holding_reg(HOLDING_TIMESTAMP_LO_IDX, (uint16_t)now);
+
 
     if (lfs_port_mount(&lfs, w25qxx_flash()) == 0) {
         history_init(&lfs);
     } else {
         LOG_WRN("littlefs mount failed, history disabled");
-        history_init(NULL); /* 仅建队, 写入静默丢弃 */
+        history_init(NULL);
     }
-    /* settings 恢复后同步历史开关 (否则重启后 history_enabled 恒 false,
-     * 已使能的历史实际不会写入) */
+
+    /* settings 恢复后同步历史开关 */
     history_enable_write(get_holding_reg(HOLDING_HISTORY_ENABLE_IDX) != 0);
 
     /* ---- IO 采样 (holding_reg 已加载) ---- */
     dio_start();
     adc_start();
-    can_start(); /* 波特率/ID 取启动快照 reg 0x07/0x06; 运行期写只存,
-                  * 重启后经 config_store 生效 (与 rtu 同语义) */
+    can_start();
+
 
     /* ---- 网络 + 协议任务 ---- */
     net_setup();
-    mb_tcp_start();  /* 从站号启动快照 holding_reg[0x09] */
-    mb_rtu_start();  /* 波特率/从站号启动快照 holding_reg[0x08]/[0x09] */
+    mb_tcp_start();
+    mb_rtu_start();
     udp_cfg_start();
+
 
     LOG_INF("io-edge-hub ready");
 
@@ -239,6 +256,18 @@ int main(void)
      * w25qxx 的事件型喂狗 */
     watchdog_init();
 
+
+    vTaskDelete(NULL); /* boot 任务完成, 由 heartbeat 任务接管 */
+}
+
+int main(void)
+{
+    HAL_Init();      /* NVIC 优先级分组 + TIM7 tick (HAL_Delay 就绪) */
+    board_init();    /* 时钟 168MHz + GPIO 端口时钟 */
+
+    /* 所有 FreeRTOS API 调用挪到 boot_task, 在调度器启动后执行,
+     * 避免 CM4F port 的 uxCriticalNesting 魔数导致 BASEPRI 永久屏蔽 */
+    xTaskCreateStatic(boot_task, "boot", 1024, NULL, 6, boot_stack, &boot_tcb);
     xTaskCreateStatic(heartbeat_task, "hb", 512, NULL, 1, hb_stack, &hb_tcb);
     vTaskStartScheduler();
     for (;;) {}
