@@ -49,7 +49,10 @@
 #define RTU_DE_PIN         GPIO_PIN_1
 #define RTU_DE_SETUP_LOOPS 2000u /* DE 建立时间 (~30us @168MHz, 先于起始位) */
 
-#define RTU_TASK_STACK     512u  /* 字 */
+/* 栈 1024 字 = 4096B: FC06 写 reg 0x10/0x11 在本任务内执行
+ * config_store -> SPI 保存 (+history_sync), 调用链与 Modbus TCP
+ * 任务一致 (该任务同为 1024 字), 原 512 字余量不足 */
+#define RTU_TASK_STACK     1024u /* 字 */
 #define RTU_TASK_PRIO      5u
 
 /* 帧状态机缓冲同为 256B, 此处只做字节搬运 */
@@ -245,6 +248,12 @@ void mb_rtu_start(void)
 	/* 启动时固定 (reg 0x08 默认 9600 / reg 0x09 默认 1); 运行期写
 	 * 只存不生效 */
 	baud = get_holding_reg(HOLDING_RS485_BAUDRATE_IDX);
+	/* 波特率兜底: 0 或超出 1200..115200 回落 9600 —— HAL 对 baud 0
+	 * 初始化失败 (Zephyr 侧 -EINVAL), 持久化损坏值不得阻断 UART 启动 */
+	if (baud < 1200u || baud > 115200u) {
+		LOG_WRN("rtu baud %u invalid, fallback 9600", (unsigned)baud);
+		baud = 9600;
+	}
 	srv_unit = (uint8_t)get_holding_reg(HOLDING_SLAVE_ID_IDX);
 
 	rtu_de_init();
