@@ -33,5 +33,9 @@ void watchdog_init(void)
 
 void watchdog_feed(void)
 {
-	HAL_IWDG_Refresh(&hiwdg);
+	/* watchdog_init 之前的调用 (w25qxx 擦除轮询 / lfs_port 挂载失败格式
+	 * 化路径) 为无操作: IWDG 尚未启动无需喂, Instance 判空防 NULL 解引用 */
+	if (hiwdg.Instance != NULL) {
+		HAL_IWDG_Refresh(&hiwdg);
+	}
 }
