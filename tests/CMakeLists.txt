@@ -42,6 +42,16 @@ target_compile_definitions(test_mbtcp_adu PRIVATE
   FW_VERSION_MAJOR=0 FW_VERSION_MINOR=3 FW_VERSION_PATCH=0
   FW_GIT_VERSION="\"test\"")
 
+# rtu_frame: RTU 帧状态机 (拼帧/CRC 校验/单播过滤/广播抑制/溢出保护),
+# 内部直连 mb_server+regmap; 帧构造用 crc16_modbus, 诊断计数组合经
+# FC08 子功能交叉验证 (bus_msg 含被丢弃帧, 对齐 Zephyr handler 入口)
+io_test(test_rtu_frame test_rtu_frame.c fake_flash.c
+  ${SRC}/modbus/rtu_frame.c ${SRC}/modbus/mb_server.c ${SRC}/modbus/regmap.c
+  ${SRC}/storage/config_store.c ${SRC}/util/io_crc.c ${SRC}/util/io_bytes.c)
+target_compile_definitions(test_rtu_frame PRIVATE
+  FW_VERSION_MAJOR=0 FW_VERSION_MINOR=3 FW_VERSION_PATCH=0
+  FW_GIT_VERSION="\"test\"")
+
 # lfs_port: littlefs 移植层, RAM 假件上挂载/读写/脏分区恢复。
 # littlefs 本体 (deps/littlefs) 可直接 host 编译; LFS_PORT_TEST_SMALL 把
 # 分区缩到 256 KiB (假件仅 1 MiB), LFS_OFFSET 仍为真实值。

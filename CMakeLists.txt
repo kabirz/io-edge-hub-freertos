@@ -41,6 +41,8 @@ set(APP_SOURCES
     src/modbus/mb_server.c
     src/modbus/mbtcp_adu.c
     src/modbus/tcp.c
+    src/modbus/rtu_frame.c
+    src/modbus/rtu.c
     src/net/w5500.c
     src/sys/app_stubs.c
     deps/littlefs/lfs.c
@@ -93,6 +95,7 @@ target_link_libraries(fw.elf PRIVATE
     HAL::STM32::F4::GPIO
     HAL::STM32::F4::CORTEX
     HAL::STM32::F4::UART
+    HAL::STM32::F4::DMA
     HAL::STM32::F4::SPI
     HAL::STM32::F4::ADC
     HAL::STM32::F4::CAN
