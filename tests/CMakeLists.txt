@@ -52,6 +52,16 @@ target_compile_definitions(test_rtu_frame PRIVATE
   FW_VERSION_MAJOR=0 FW_VERSION_MINOR=3 FW_VERSION_PATCH=0
   FW_GIT_VERSION="\"test\"")
 
+# udp_cfg: UDP 配置协议命令层 (0x10-0x19 逐字节应答/总是应答规则/
+# 未知命令静默/FACTORY_RESET 两步确认 + 开机 5s 单命令怪癖),
+# 内部直连 regmap+config_store; 时间钩子 udp_now_ms 绑可控计数器
+io_test(test_udp_cfg test_udp_cfg.c fake_flash.c
+  ${SRC}/net/udp_cfg.c ${SRC}/modbus/regmap.c ${SRC}/storage/config_store.c
+  ${SRC}/util/io_crc.c ${SRC}/util/io_bytes.c)
+target_compile_definitions(test_udp_cfg PRIVATE
+  FW_VERSION_MAJOR=0 FW_VERSION_MINOR=3 FW_VERSION_PATCH=0
+  FW_GIT_VERSION="\"test\"")
+
 # lfs_port: littlefs 移植层, RAM 假件上挂载/读写/脏分区恢复。
 # littlefs 本体 (deps/littlefs) 可直接 host 编译; LFS_PORT_TEST_SMALL 把
 # 分区缩到 256 KiB (假件仅 1 MiB), LFS_OFFSET 仍为真实值。
