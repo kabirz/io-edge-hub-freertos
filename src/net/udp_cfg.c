@@ -31,6 +31,8 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
+#include <stdio.h>
 #include <time.h>
 
 #include "udp_cfg.h"
@@ -38,6 +40,7 @@
 #include "io_hooks.h"
 #include "io_bytes.h"
 #include "config_store.h"
+#include "fw_version.h"
 
 #include "log.h"
 
@@ -77,16 +80,20 @@ static bool factory_reset_confirmed;
 /* 确认步已执行: 传输层重启待办标志 (契约见 udp_cfg_reboot_pending) */
 static volatile bool factory_reset_reboot_pending;
 
+/* REBOOT 立即重启标志 (对齐 Zephyr FW_CMD_REBOOT, 无两步确认) */
+static volatile bool reboot_reboot_pending;
+
 void udp_cfg_reset_pending(void)
 {
 	factory_reset_pending_ms = 0;
 	factory_reset_confirmed = false;
 	factory_reset_reboot_pending = false;
+	reboot_reboot_pending = false;
 }
 
 bool udp_cfg_reboot_pending(void)
 {
-	return factory_reset_reboot_pending;
+	return factory_reset_reboot_pending || reboot_reboot_pending;
 }
 
 static uint16_t udp_factory_reset(uint8_t *reply, uint16_t cap, uint8_t cmd)
@@ -186,6 +193,24 @@ uint16_t udp_app_cmd(uint8_t cmd, const uint8_t *data, uint16_t len,
 		}
 		return reply_ok(reply, cap, cmd, ok); /* len<4 也总是应答 */
 	}
+
+	case UDP_CMD_GET_VERSION: {
+		/* 对齐 Zephyr FW_CMD_GET_VERSION: 返回版本字符串
+		 * "v<major>.<minor>.<patch>_<git_hash>" (无尾 NUL) */
+		int n = snprintf((char *)&reply[1], cap - 1u, "v%d.%d.%d_%s",
+				  FW_VERSION_MAJOR, FW_VERSION_MINOR,
+				  FW_VERSION_PATCH, FW_GIT_VERSION);
+		if (n < 0 || (uint16_t)n >= cap - 1u) {
+			return 0;
+		}
+		reply[0] = cmd;
+		return (uint16_t)(1 + n);
+	}
+
+	case UDP_CMD_REBOOT:
+		/* 对齐 Zephyr FW_CMD_REBOOT: 立即重启 (无两步确认) */
+		reboot_reboot_pending = true;
+		return reply_ok(reply, cap, cmd, 1);
 
 	case UDP_CMD_FACTORY_RESET:
 		return udp_factory_reset(reply, cap, cmd);

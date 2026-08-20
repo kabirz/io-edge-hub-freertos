@@ -22,9 +22,12 @@
 extern "C" {
 #endif
 
-/* 命令码 (Zephyr 版 src/udp.h 逐值保留; 0x01-0x06 为库内固件升级命令,
- * 一期无 MCUboot 未实现 -> udp_app_cmd 按未知命令静默) */
+/* 命令码 (Zephyr 版 udp.h + udp_fw_upgrade.h 逐值保留):
+ * 0x04/0x05 对齐 Zephyr fw_cmd (一期无 MCUboot, 直接在 app 层处理);
+ * 0x10-0x19 对齐 Zephyr udp_app_cmd */
 enum udp_cmd {
+	UDP_CMD_GET_VERSION   = 0x04, /*                           -> "v<major>.<minor>.<patch>_<git>" */
+	UDP_CMD_REBOOT        = 0x05, /* 两步确认 (5s 窗)          -> [0x05][ok] */
 	UDP_CMD_SET_IP        = 0x10, /* [a][b][c][d]              -> [0x10][ok] */
 	UDP_CMD_GET_IP        = 0x11, /*                           -> [0x11][a][b][c][d] */
 	UDP_CMD_SET_MODBUS    = 0x12, /* [slave 1B][baud BE16]     -> [0x12][ok] */
