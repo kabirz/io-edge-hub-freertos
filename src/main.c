@@ -6,8 +6,9 @@
  * 级初始化的合并对应物):
  *   - 初始化顺序 = 设计文档 §6.2 (配置先于使用者, 存储先于历史, 网络
  *     最后): HAL/时钟 -> OS/日志/RTC -> 存储链 (NOR -> config ->
- *     littlefs -> 历史) -> IO 采样 -> 网络 (MAC=UID 派生, IP=holding_reg)
- *     -> Modbus/UDP 任务 -> IWDG -> 心跳任务 -> 调度器
+ *     littlefs -> 历史) -> IO 采样 -> CAN (波特率/ID 启动快照) -> 网络
+ *     (MAC=UID 派生, IP=holding_reg) -> Modbus/UDP 任务 -> IWDG -> 心跳
+ *     任务 -> 调度器
  *   - MAC: STM32 96-bit UID 折叠 + Wiznet OUI 00:08:DC (Zephyr 版
  *     derive_mac_from_uid 逐式移植)
  *   - 失败降级不阻断启动: NOR 不在位 -> 出厂默认 + 历史停写; littlefs
@@ -34,6 +35,7 @@
 #include "lfs_port.h"     /* lfs_port_mount / lfs_t */
 #include "history.h"      /* history_init */
 #include "io.h"           /* dio_start / adc_start */
+#include "io_can.h"       /* can_start / mod_can_send */
 #include "w5500.h"        /* w5500_net_init / w5500_net_ready */
 #include "udp_cfg.h"      /* udp_cfg_start */
 #include "wizchip_conf.h" /* getPHYCFGR / PHYCFGR_LNK_ON (boot 链路轮询) */
@@ -222,8 +224,8 @@ int main(void)
     /* ---- IO 采样 (holding_reg 已加载) ---- */
     dio_start();
     adc_start();
-    /* can_start(): Task 16 接线位 -- CAN 波特率/ID 取 holding_reg[0x07]/
-     * [0x06] (已加载), 顺序在 adc 之后、网络之前 */
+    can_start(); /* 波特率/ID 取启动快照 reg 0x07/0x06; 运行期写只存,
+                  * 重启后经 config_store 生效 (与 rtu 同语义) */
 
     /* ---- 网络 + 协议任务 ---- */
     net_setup();

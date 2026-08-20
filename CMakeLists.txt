@@ -49,6 +49,7 @@ set(APP_SOURCES
     src/modbus/rtu_frame.c
     src/modbus/rtu.c
     src/net/w5500.c
+    src/net/can.c
     src/net/udp_cfg.c
     src/net/udp_task.c
     src/io/dio.c
