@@ -245,10 +245,13 @@ int w5500_net_init(const uint8_t mac[6], const uint8_t ip[4],
 	reg_wizchip_spi_cbfunc(wiz_spi_readbyte, wiz_spi_writebyte);
 	reg_wizchip_spiburst_cbfunc(wiz_spi_readburst, wiz_spi_writeburst);
 
-	/* 2KB x 8 socket 缓冲 (上电默认即此, 显式写一遍确定态) */
+	/* Buffer allocation:
+	 * Socket 0: 16KB RX + 16KB TX (reserved for MACRAW / LwIP netif)
+	 * Sockets 1-3: 2KB each (ioLibrary: Modbus TCP + UDP config)
+	 * Sockets 4-7: 0 (unused) */
 	for (int i = 0; i < _WIZCHIP_SOCK_NUM_; i++) {
-		txsize[i] = 2;
-		rxsize[i] = 2;
+		txsize[i] = (i == 0) ? 16 : 2;
+		rxsize[i] = (i == 0) ? 16 : 2;
 	}
 	if (wizchip_init(txsize, rxsize) != 0) {
 		LOG_WRN("wizchip_init failed");

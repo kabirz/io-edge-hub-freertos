@@ -10,7 +10,14 @@
 #include <lwip/sys.h>
 #include <lwip/err.h>
 
-/* ---- mbox (FreeRTOS queue-based) ---- */
+/* ---- sys_init (called by lwip_init, no-op for FreeRTOS) ---- */
+
+void sys_init(void)
+{
+    /* FreeRTOS manages all OS resources; nothing to do here. */
+}
+
+/* ---- mbox ---- */
 
 err_t sys_mbox_new(sys_mbox_t *mb, int size)
 {
@@ -31,6 +38,22 @@ void sys_mbox_post(sys_mbox_t *mb, void *msg)
 err_t sys_mbox_trypost(sys_mbox_t *mb, void *msg)
 {
     return xQueueSend(*mb, &msg, 0) == pdTRUE ? ERR_OK : ERR_MEM;
+}
+
+u32_t sys_arch_mbox_fetch(sys_mbox_t *mb, void **msg, u32_t timeout)
+{
+    TickType_t ticks = (timeout == 0) ? portMAX_DELAY :
+                        pdMS_TO_TICKS(timeout);
+    if (xQueueReceive(*mb, msg, ticks) == pdTRUE) {
+        return 0; /* success */
+    }
+    *msg = NULL;
+    return SYS_ARCH_TIMEOUT;
+}
+
+int sys_mbox_valid(sys_mbox_t *mb)
+{
+    return (*mb != NULL) ? 1 : 0;
 }
 
 u32_t sys_mbox_tryfetch(sys_mbox_t *mb, void **msg)
@@ -112,10 +135,31 @@ void sys_yield(void)
 
 u32_t sys_arch_random(void)
 {
-    /* Simple PRNG based on SysTick; good enough for TCP ISN */
     static uint32_t seed = 0xDEADBEEF;
     seed ^= seed << 13;
     seed ^= seed >> 17;
     seed ^= seed << 5;
     return seed;
+}
+
+/* ---- thread create (for tcpip_init's tcpip thread) ---- */
+
+sys_thread_t sys_thread_new(const char *name, lwip_thread_fn thread,
+                            void *arg, int stacksize, int prio)
+{
+    (void)name;
+    StackType_t *stk = (StackType_t *)pvPortMalloc((size_t)stacksize * sizeof(StackType_t));
+    StaticTask_t *tcb = (StaticTask_t *)pvPortMalloc(sizeof(StaticTask_t));
+    if (stk == NULL || tcb == NULL) {
+        return NULL;
+    }
+    return xTaskCreateStatic((TaskFunction_t)thread, name, (uint32_t)stacksize,
+                             arg, (UBaseType_t)prio, stk, tcb);
+}
+
+/* ---- sys_now: system time in milliseconds ---- */
+
+u32_t sys_now(void)
+{
+    return (u32_t)pdTICKS_TO_MS(xTaskGetTickCount());
 }

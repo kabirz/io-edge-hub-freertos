@@ -37,8 +37,11 @@
 #include "io.h"           /* dio_start / adc_start */
 #include "io_can.h"       /* can_start / mod_can_send */
 #include "w5500.h"        /* w5500_net_init / w5500_net_ready */
+#include "w5500_macraw.h" /* w5500_macraw_init (LwIP MACRAW netif) */
 #include "udp_cfg.h"      /* udp_cfg_start */
 #include "wizchip_conf.h" /* getPHYCFGR / PHYCFGR_LNK_ON (boot 链路轮询) */
+
+#include "lwip/tcpip.h"   /* tcpip_init */
 
 /* Modbus 传输层启动入口 (src/modbus/tcp.c / rtu.c; target-only,
  * 仅 main 接线使用, 不单设头文件) */
@@ -244,6 +247,16 @@ static void boot_task(void *arg)
 
     /* ---- 网络 + 协议任务 ---- */
     net_setup();
+
+    /* LwIP + MACRAW netif: tcpip_init starts the tcpip thread,
+     * then MACRAW opens Socket 0 for Ethernet frame I/O via LwIP. */
+    tcpip_init(NULL, NULL);
+    {
+        uint8_t mac[6];
+        derive_mac_from_uid(mac);
+        w5500_macraw_init(mac);
+    }
+
     mb_tcp_start();
     mb_rtu_start();
     udp_cfg_start();

@@ -84,6 +84,7 @@ list(APPEND APP_SOURCES
     ${LWIP_DIR}/src/core/tcp.c
     ${LWIP_DIR}/src/core/tcp_in.c
     ${LWIP_DIR}/src/core/tcp_out.c
+    ${LWIP_DIR}/src/api/tcpip.c
     ${LWIP_DIR}/src/core/timeouts.c
     ${LWIP_DIR}/src/core/udp.c
     ${LWIP_DIR}/src/core/ipv4/ip4.c
@@ -155,6 +156,7 @@ set_source_files_properties(
     ${LWIP_DIR}/src/core/tcp.c
     ${LWIP_DIR}/src/core/tcp_in.c
     ${LWIP_DIR}/src/core/tcp_out.c
+    ${LWIP_DIR}/src/api/tcpip.c
     ${LWIP_DIR}/src/core/timeouts.c
     ${LWIP_DIR}/src/core/udp.c
     ${LWIP_DIR}/src/core/ipv4/ip4.c
