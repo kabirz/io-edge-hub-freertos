@@ -5,6 +5,7 @@
  */
 
 #include <time.h>
+#include "io_compat.h" /* MSVC gmtime_r 垫片 */
 
 #include "test_util.h"
 #include "io_time.h"

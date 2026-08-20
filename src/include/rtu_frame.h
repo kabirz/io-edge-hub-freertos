@@ -47,8 +47,9 @@ void rtu_t35_expired(void);
 void rtu_frame_bind(uint8_t srv_unit, uint32_t baud,
 		    void (*tx)(const uint8_t *frame, uint16_t len));
 
-/* t3.5 定时重启钩子, rtu_rx_feed 内部每次调用。弱默认为空 (host);
- * target 传输层提供强符号 (ISR 上下文, 用 xTimerResetFromISR)。 */
+/* t3.5 定时重启钩子, rtu_rx_feed 内部每次调用。本层不提供默认实现:
+ * target 传输层提供 (rtu.c, ISR 上下文 xTimerResetFromISR),
+ * host 测试在测试文件内提供计数假件。 */
 void rtu_t35_kick(void);
 
 /* t3.5 周期 (ms): ceil(3.5 字符 x 11 bit / baud), baud>19200 固定 2ms

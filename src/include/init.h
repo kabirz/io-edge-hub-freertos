@@ -70,8 +70,11 @@ enum holding_reg_idx {
 #define DI_TYPE 1
 #define AI_TYPE 2
 
-/* Zephyr toolchain 兼容: __packed -> GCC attribute */
-#ifndef __packed
+/* Zephyr toolchain 兼容: __packed -> GCC attribute; MSVC (主机测试) 用 pack pragma */
+#if !defined(__packed) && (defined(_MSC_VER))
+#pragma pack(push, 1)
+#define __packed
+#elif !defined(__packed)
 #define __packed __attribute__((packed))
 #endif
 
@@ -89,6 +92,10 @@ struct his_data {
 		} ai;
 	};
 } __packed;
+
+#if defined(_MSC_VER)
+#pragma pack(pop)
+#endif
 
 /* ==================== 寄存器访问 (modbus/regmap.c) ==================== */
 uint16_t get_holding_reg(uint16_t addr);

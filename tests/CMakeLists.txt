@@ -8,11 +8,26 @@ enable_testing()
 function(io_test name)
   add_executable(${name} ${ARGN})
   target_include_directories(${name} PRIVATE ${SRC}/include ${SRC} ${CMAKE_CURRENT_SOURCE_DIR})
-  target_compile_options(${name} PRIVATE -Wall -Wextra -O1)
+  if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(${name} PRIVATE -Wall -Wextra -O1)
+  elseif(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
+    # /utf-8: 源文件为 UTF-8, 防 GBK 代码页下注释双字节配对吞掉 */ (C4819 及连带语法错)
+    # Debug 默认 /RTC1 与 /O1 冲突, 优化交给配置默认; 警告用 /W4;
+    # 4996 为 strcpy 安全告警
+    target_compile_options(${name} PRIVATE /W4 /utf-8 /wd4146 /wd4267)
+    target_compile_definitions(${name} PRIVATE _CRT_SECURE_NO_WARNINGS)
+  endif()
   # log.h 默认开 (调 log_write, target-only); host 统一编译为空宏
   target_compile_definitions(${name} PRIVATE LOG_ENABLE=0)
   add_test(NAME ${name} COMMAND ${name})
 endfunction()
+
+# 上游 littlefs 源在 MSVC /W4 下的既有告警 (4244/4456/4701), 按项目约定单独压掉
+if(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
+  set_source_files_properties(
+    ${REPO_ROOT}/deps/littlefs/lfs.c ${REPO_ROOT}/deps/littlefs/lfs_util.c
+    PROPERTIES COMPILE_OPTIONS "/wd4244;/wd4456;/wd4701")
+endif()
 
 io_test(test_bytes_crc test_bytes_crc.c ${SRC}/util/io_bytes.c ${SRC}/util/io_crc.c)
 io_test(test_config_store test_config_store.c fake_flash.c

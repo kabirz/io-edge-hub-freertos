@@ -127,5 +127,9 @@
 
 ## 环境说明
 
-- 主机单元测试在 WSL/Linux 下构建运行 (`tests/`, 见 README);
-  Windows 原生无编译器环境, 非固件行为偏差。
+- 主机单元测试 (`tests/`, 见 README) 在 Windows 原生 MSVC 与 WSL/Linux GCC
+  双编译器下均可构建运行 (11/11 基线); 曾记录"Windows 原生无编译器环境"
+  有误——MSVC 不在 CMD PATH 里, 但 CMake 的 Visual Studio 生成器可自动定位
+  VS 安装。MSVC 编译需 `/utf-8` (UTF-8 源码防 GBK 代码页双字节配对吞掉
+  注释结尾)、`gmtime_r`→`gmtime_s` 垫片与无弱符号处理 (见
+  `src/include/io_compat.h`、`tests/CMakeLists.txt`), 非固件行为偏差。

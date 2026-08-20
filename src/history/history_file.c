@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include "io_compat.h" /* MSVC gmtime_r 垫片 (主机测试) */
 #include "history_file.h"
 
 #include "log.h" /* LOG_* (host 测试经 LOG_ENABLE=0 编译为空) */

@@ -96,10 +96,21 @@ arm-none-eabi-gcc) 均可 —— stm32-cmake 按目标三元组找编译器, 把
 Zephyr 专属工具, newlib/nosys 链接路径一致。(本项目实际构建一直用
 Zephyr SDK, 回退路径未逐版本验证。)
 
-## 主机单元测试 (WSL / Linux)
+## 主机单元测试
 
 纯逻辑层 (字节序/CRC/配置/寄存器/Modbus 解析/RTU 状态机/UDP 命令/
-时间门/littlefs 移植/ADC 换算/历史文件) 可脱离硬件在主机跑:
+时间门/littlefs 移植/ADC 换算/历史文件) 可脱离硬件在主机跑。
+
+**Windows 原生 (推荐)** —— 需已安装 Visual Studio (MSVC), CMake 自动
+定位 VS 生成器与工具链:
+
+```bat
+cmake -S tests -B build-host-win
+cmake --build build-host-win --config Debug
+ctest --test-dir build-host-win -C Debug --output-on-failure
+```
+
+**WSL / Linux 备选**:
 
 ```bash
 wsl -e bash -c "cd /mnt/c/Users/jxwaz/code/io-edge-hub-freertos \
@@ -108,7 +119,7 @@ wsl -e bash -c "cd /mnt/c/Users/jxwaz/code/io-edge-hub-freertos \
   && (cd build-host && ctest --output-on-failure)"
 ```
 
-11 个测试目标全部通过为基线。
+11 个测试目标全部通过为基线 (MSVC 与 GCC 双编译器均通过)。
 
 ## 烧录
 

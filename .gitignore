@@ -8,3 +8,4 @@ build-host/
 *.bin
 *.map
 *.log
+build-host-win/  

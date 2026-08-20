@@ -39,6 +39,7 @@
 #include "rtu_frame.h"
 #include "mb_server.h"
 #include "io_crc.h"
+#include "io_compat.h" /* IO_WEAK (MSVC 主机测试兼容) */
 
 /* Zephyr CONFIG_MODBUS_BUFFER_SIZE / MODBUS_RTU_MIN_MSG_SIZE */
 #define RTU_FRAME_MAX 256u
@@ -58,10 +59,8 @@ static void (*tx_cb)(const uint8_t *frame, uint16_t len);
 static uint8_t rsp_pdu[MB_SERVER_PDU_MAX];
 static uint8_t tx_frame[1 + MB_SERVER_PDU_MAX + 2];
 
-/* 弱默认: host 测试无定时器; target 传输层 (rtu.c) 强符号覆盖 */
-__attribute__((weak)) void rtu_t35_kick(void)
-{
-}
+/* rtu_t35_kick 无默认实现: target 由 rtu.c 提供 (强符号),
+ * host 测试提供计数假件 (跨编译器: MSVC 无弱符号机制)。 */
 
 void rtu_reset(void)
 {
