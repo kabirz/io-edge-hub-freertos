@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * 硬件看门狗 (STM32 独立看门狗 IWDG) — Zephyr 版 src/sys/watchdog.c
- * (wdt 驱动) 的 HAL 直接移植, 强符号覆盖 app_stubs.c 的 weak 占位。
+ * (wdt 驱动) 的 HAL 直接移植。
  *
  * 30 秒超时, 心跳任务周期喂狗 (原 Zephyr main 主循环职责, 3s 周期);
  * fs_littlefs mkfs 擦整个 15MB NOR 期间 lfs_port/w25qxx 事件型喂狗

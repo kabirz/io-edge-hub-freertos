@@ -9,7 +9,9 @@
  * (含脏分区/半擦除分区) 时自动格式化重挂 — 对齐 Zephyr 版 "任何失败都
  * mkfs 一次" 的语义。擦除回调内喂狗 (全片格式化可达分钟级)。
  *
- * 无动态分配: cache/lookahead 缓冲均为静态。
+ * 缓冲分配: read/prog/lookahead 缓冲均为静态; 每文件 1KB 缓存由
+ * littlefs 动态分配 — 固件经 LFS_MALLOC 路由到 heap_4 (lfs_heap.h),
+ * host 用系统 malloc。
  */
 
 #ifndef LFS_PORT_H

@@ -165,10 +165,9 @@ static void net_setup(void)
     LOG_INF("IP: %u.%u.%u.%u/24", ip[0], ip[1], ip[2], ip[3]);
 
     /* 链路等待 <=5s (Zephyr: k_sem_take(net_link_sem, 5s) 超时继续)。
-     * net_link_sem 由链路监控任务 give / w5500_link_up() 为任务刷新的
-     * 缓存, 调度器启动前两者恒假且阻塞 take 前调度器不可用 -- 等价
-     * 语义: 直接轮询 PHYCFGR.LNK (监控任务同源判据), 100ms x 50 = 5s
-     * 上限, 超时 WRN 继续 (网线未插不永久阻塞) */
+     * 本移植调度器启动前无阻塞原语可用, 等价语义: 直接轮询
+     * PHYCFGR.LNK (监控任务同源判据), 100ms x 50 = 5s 上限, 超时 WRN
+     * 继续 (网线未插不永久阻塞) */
     for (i = 0; i < 50 && (getPHYCFGR() & PHYCFGR_LNK_ON) == 0; i++) {
         HAL_Delay(100);
     }

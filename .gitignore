@@ -1,5 +1,7 @@
 .superpowers/
+.cache/
 build/
+build-rel/
 build-host/
 *.elf
 *.hex

@@ -9,9 +9,8 @@
  *   - wizchip_init: 2KB x 8 socket 缓冲; 静态 netinfo (无 DHCP,
  *     dns=0.0.0.0); PHY 软件配置 10/100 全双工自协商
  *   - socket 池: 0-3 固定 (UDP 配置 + Modbus TCP), 4-7 空闲供二期
- *   - 500ms 链路监控任务 (prio 4, 栈 256 字): 上升沿 give net_link_sem;
- *     下降沿 DO 全灭 (update_holding_reg + mb_set_do, 对齐 Zephyr
- *     NET_EVENT_IF_DOWN 行为)
+ *   - 500ms 链路监控任务 (prio 4, 栈 256 字): 下降沿 DO 全灭
+ *     (update_holding_reg + mb_set_do, 对齐 Zephyr NET_EVENT_IF_DOWN 行为)
  *
  * 并发: 每次寄存器访问 (CS 拉低到拉高整段) 在 ioLibrary 的 CRIS 临界
  * 区内完成 (taskENTER_CRITICAL 屏蔽抢占, 无阻塞调用), Modbus 任务与
@@ -20,7 +19,6 @@
 
 #include "FreeRTOS.h"
 #include "task.h"
-#include "semphr.h"
 
 #include "main.h"
 #include "spi.h"
@@ -48,9 +46,6 @@
 #define W5500_VERSIONR_VALUE 0x04u
 
 /* ==================== 状态 ==================== */
-static StaticSemaphore_t net_link_sem_cb;
-SemaphoreHandle_t net_link_sem;
-
 static StackType_t net_mon_stack[256];
 static StaticTask_t net_mon_tcb;
 
@@ -180,9 +175,6 @@ static void net_mon_task(void *arg)
 			  ((getPHYCFGR() & PHYCFGR_LNK_ON) != 0);
 
 		if (up && !prev_up) {
-			/* 上升沿: 通知 boot 等待点 (二值信号量, 重复
-			 * give 无副作用; 断线重插同样给出) */
-			(void)xSemaphoreGive(net_link_sem);
 			LOG_INF("net link up");
 		} else if (!up && prev_up) {
 			/* 下降沿: DO 全灭 + 影子寄存器清零, 仅边沿触发
@@ -230,7 +222,6 @@ static void w5500_hw_reset(void)
 int w5500_net_init(const uint8_t mac[6], const uint8_t ip[4],
 		   const uint8_t mask[4], const uint8_t gw[4])
 {
-	static bool started; /* 信号量只建一次, 保证 net_link_sem 恒有效 */
 	uint8_t txsize[_WIZCHIP_SOCK_NUM_];
 	uint8_t rxsize[_WIZCHIP_SOCK_NUM_];
 	wiz_NetInfo ni = {0};
@@ -243,13 +234,6 @@ int w5500_net_init(const uint8_t mac[6], const uint8_t ip[4],
 
 	if (net_ready) {
 		return 0; /* 幂等 */
-	}
-
-	/* 先建信号量再碰硬件: 即使初始化失败, boot 等待点拿到的也是
-	 * 永不 give 的空信号量 (超时返回, 与链路断开同语义) */
-	if (!started) {
-		net_link_sem = xSemaphoreCreateBinaryStatic(&net_link_sem_cb);
-		started = true;
 	}
 
 	spi2_init();       /* SPI2 外设 + PB12-15 引脚 (含 CS 空闲高) */

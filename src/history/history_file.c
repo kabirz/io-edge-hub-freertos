@@ -71,8 +71,16 @@ static void cleanup_old_files(void)
 			continue;
 		}
 		if (n < HIST_MAX_FILES + 2) {
-			strncpy(names[n], info.name, sizeof(names[0]) - 1);
-			names[n][sizeof(names[0]) - 1] = '\0';
+			/* 限长拷贝 (容量 24B 截断为本意, names[12] 上限与
+			 * Zephyr 版一致; strncpy 在 -O3 触发误报
+			 * -Wstringop-truncation, 改显式钳位) */
+			size_t len = strlen(info.name);
+
+			if (len > sizeof(names[0]) - 1) {
+				len = sizeof(names[0]) - 1;
+			}
+			memcpy(names[n], info.name, len);
+			names[n][len] = '\0';
 			n++;
 		}
 	}
@@ -185,7 +193,15 @@ static int ensure_file(void)
 				if (info.type == LFS_TYPE_REG &&
 				    strncmp(info.name, "data_", 5) == 0 &&
 				    strcmp(info.name, latest) > 0) {
-					strncpy(latest, info.name, sizeof(latest) - 1);
+					/* 同上: 显式钳位拷贝, 避免
+					 * -Wstringop-truncation 误报 */
+					size_t len = strlen(info.name);
+
+					if (len > sizeof(latest) - 1) {
+						len = sizeof(latest) - 1;
+					}
+					memcpy(latest, info.name, len);
+					latest[len] = '\0';
 				}
 			}
 			lfs_dir_close(his_lfs, &dir);

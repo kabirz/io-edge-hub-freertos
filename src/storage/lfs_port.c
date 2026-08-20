@@ -10,6 +10,26 @@
 #include "io_watchdog.h"
 #include <stdint.h>
 
+/* fw 构建的 heap_4 适配实现 (littlefs 源文件编译带
+ * LFS_MALLOC=lfs_heap_alloc, 见 include/lfs_heap.h); host 测试不带
+ * LFS_HEAP_FW, 本段不参与编译, 照常用系统 malloc */
+#ifdef LFS_HEAP_FW
+#include "FreeRTOS.h" /* pvPortMalloc / vPortFree (heap_4) */
+#include "lfs_heap.h"
+
+void *lfs_heap_alloc(size_t size)
+{
+    return pvPortMalloc(size);
+}
+
+void lfs_heap_free(void *p)
+{
+    if (p != NULL) {
+        vPortFree(p);
+    }
+}
+#endif
+
 /* 对齐 Zephyr 版 (fs_littlefs.c +littlefs 默认): read 16 / prog 16 /
  * cache 1024 / lookahead 32 / cycles 512 / block 4096 */
 #define PORT_BLOCK_SIZE 4096u

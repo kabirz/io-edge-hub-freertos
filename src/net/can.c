@@ -159,7 +159,8 @@ void can_start(void)
          * stm32f4xx_hal_can.c 16BIT 分支实证)。标准 ID 半字布局
          * = STID[10:0]<<5, 故 (id<<5, 0x7FF<<5) = 该组精确匹配
          * 业务 ID; 两组同配 -- 任一组为 (0,0) 都会退化为全收,
-         * 与"精确匹配"目标矛盾 */
+         * 与"精确匹配"目标矛盾。掩码 RTR/IDE 位为 0 = don't-care
+         * (16 位刻度下半字 bit4=RTR/bit3=IDE), 远端帧按 STID 同判通过 */
         .FilterIdHigh = (uint32_t)id << 5,
         .FilterIdLow = (uint32_t)id << 5,
         .FilterMaskIdHigh = 0x7FFu << 5,

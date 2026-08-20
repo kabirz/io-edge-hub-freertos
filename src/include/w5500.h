@@ -17,9 +17,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#include "FreeRTOS.h"
-#include "semphr.h"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -28,10 +25,6 @@ extern "C" {
 #define SN_UDP_CFG   0  /* UDP 配置通道 (固定, 不进池) */
 #define SN_MB_BASE   1  /* 1/2/3 归 Modbus TCP (固定, 不进池) */
 #define SN_POOL_BASE 4  /* sn_alloc 分配下限 (4-7 空闲池) */
-
-/* 链路上升沿给出 (boot 等待点; 对齐 Zephyr main.c 5s 等待语义,
- * 由 Task 10 的启动序列 take)。w5500_net_init 调用过即有效。 */
-extern SemaphoreHandle_t net_link_sem;
 
 /* 初始化 W5500: SPI2 + RST PD0 复位时序 (低/高各 50ms) + ioLibrary
  * 回调注册 + wizchip_init (2KB x 8 socket 缓冲) + 静态网络信息 + PHY

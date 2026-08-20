@@ -4,7 +4,7 @@
  *
  * 系统时间 (RTC + epoch 缓存) — Zephyr 版 src/sys/time.c 的 FreeRTOS
  * 移植。io_hooks.h 声明的 set_timestamp/io_now_epoch 在 src/sys/time.c
- * 提供强符号实现 (覆盖 app_stubs.c 的 weak 占位)。
+ * 提供强符号实现。
  */
 
 #ifndef IO_TIME_H

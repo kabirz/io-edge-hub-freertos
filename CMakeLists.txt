@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 
+# Release 构建: ON 时固件整体关闭日志 (LOG_* 编译为空, log_write 不再
+# 被引用; log.c 仍编译 -- log_init/_write 保持链接可用)。默认 OFF。
+option(APP_RELEASE "Disable logging for release" OFF)
+
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" ver_file)
 string(REGEX MATCH "VERSION_MAJOR = ([0-9]+)" _ ${ver_file})
 set(FW_VERSION_MAJOR ${CMAKE_MATCH_1})
@@ -81,6 +85,11 @@ target_include_directories(fw.elf PRIVATE ${APP_INCLUDES})
 target_compile_options(fw.elf PRIVATE -Wall -Wextra)
 # ioLibrary 选型: W5500, SPI 模式 (wizchip_conf.h 默认 _WIZCHIP_=W6300)
 target_compile_definitions(fw.elf PRIVATE _WIZCHIP_=5500)
+# Release: 仅固件目标关日志 (host 测试在 tests/CMakeLists.txt 自带
+# LOG_ENABLE=0, 不受此开关影响)
+if(APP_RELEASE)
+    target_compile_definitions(fw.elf PRIVATE LOG_ENABLE=0)
+endif()
 # ioLibrary 上游不按本项目 -Wall -Wextra 级别维护, 仅这些文件关警告
 # (GCC 用 -w 全关, 排在 -Wall -Wextra 之后生效)
 set_source_files_properties(
@@ -97,6 +106,28 @@ set_source_files_properties(
     src/net/udp_task.c
     PROPERTIES COMPILE_OPTIONS "-Wno-unused-function"
 )
+# littlefs 仅在 Release (-DNDEBUG) 警告: lfs_mlist_isopen 等静态助手仅被
+# LFS_ASSERT(=assert) 引用, NDEBUG 下 assert 展开为空 -> "defined but not
+# used"。上游源码, 同前述策略仅对该文件关此警告。
+#
+# littlefs 每文件 1KB 缓存路由到 heap_4: 固件 newlib 桩 _sbrk 恒返回
+# ENOMEM, littlefs 默认 malloc 路径上机必 LFS_ERR_NOMEM (历史记录静默
+# 失效)。LFS_MALLOC/LFS_FREE 仅对 littlefs 两个源文件定义 (lfs_util.h
+# 内联 lfs_malloc/lfs_free 消费; 定义若扩散到全目标, 所有含 lfs.h 的
+# 应用编译单元都会因缺原型报 implicit-declaration), 原型经 -include
+# 的 lfs_heap.h 前置; 适配实现在 lfs_port.c (LFS_HEAP_FW 门控)。host
+# 测试是独立项目, 不带该定义, 照常用系统 malloc。
+set_source_files_properties(
+    deps/littlefs/lfs.c
+    PROPERTIES COMPILE_DEFINITIONS "LFS_MALLOC=lfs_heap_alloc;LFS_FREE=lfs_heap_free"
+               COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/src/include/lfs_heap.h;-Wno-unused-function")
+set_source_files_properties(
+    deps/littlefs/lfs_util.c
+    PROPERTIES COMPILE_DEFINITIONS "LFS_MALLOC=lfs_heap_alloc;LFS_FREE=lfs_heap_free"
+               COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/src/include/lfs_heap.h")
+set_source_files_properties(
+    src/storage/lfs_port.c
+    PROPERTIES COMPILE_DEFINITIONS "LFS_HEAP_FW")
 target_link_libraries(fw.elf PRIVATE
     FreeRTOS::ARM_CM4F
     FreeRTOS::Heap::4
