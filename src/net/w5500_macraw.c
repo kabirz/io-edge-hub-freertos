@@ -61,16 +61,14 @@ static err_t macraw_netif_init(struct netif *netif)
 
 static void low_level_init(struct netif *netif)
 {
-    uint8_t txsize[8] = {16, 0, 0, 0, 0, 0, 0, 0};
-    uint8_t rxsize[8] = {16, 0, 0, 0, 0, 0, 0, 0};
-
+    /* Socket 0 buffers already configured by w5500_net_init (8KB RX/TX).
+     * Just set MAC address and open the MACRAW socket. */
     netif->hwaddr[0] = 0x00;
     netif->hwaddr[1] = 0x08;
     netif->hwaddr[2] = 0xDC;
     netif->hwaddr_len = ETHARP_HWADDR_LEN;
 
     close(MACRAW_SN);
-    wizchip_init(txsize, rxsize);
     socket(MACRAW_SN, Sn_MR_MACRAW, 0, 0x00);
 
     if (getSn_SR(MACRAW_SN) != SOCK_MACRAW) {

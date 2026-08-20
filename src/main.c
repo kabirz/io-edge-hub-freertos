@@ -248,8 +248,7 @@ static void boot_task(void *arg)
     /* ---- 网络 + 协议任务 ---- */
     net_setup();
 
-    /* LwIP + MACRAW netif: tcpip_init starts the tcpip thread,
-     * then MACRAW opens Socket 0 for Ethernet frame I/O via LwIP. */
+    /* LwIP + MACRAW netif */
     tcpip_init(NULL, NULL);
     {
         uint8_t mac[6];

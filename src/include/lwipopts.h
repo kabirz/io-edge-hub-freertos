@@ -33,6 +33,11 @@
 #define TCP_FAST_INTERVAL       500
 #define TCP_SLOW_INTERVAL       500
 
+/* ---- Tcpip thread ---- */
+#define TCPIP_THREAD_STACKSIZE  512   /* 2048 bytes (in words) */
+#define TCPIP_THREAD_PRIO       4
+#define TCPIP_MBOX_SIZE         8     /* tcpip thread mailbox slots */
+
 /* ---- Memory ---- */
 #define MEM_SIZE                (16u * 1024)   /* 16 KB LwIP heap (SRAM) */
 
@@ -49,7 +54,7 @@
 /* ---- Pbuf ---- */
 /* pbuf pool in CCM (64KB, no DMA limitation).
  * PBUF_POOL_BUFSIZE must >= 1500 + PBUF_LINK_HLEN (14) for full Ethernet frame. */
-#define PBUF_POOL_SIZE          25
+#define PBUF_POOL_SIZE          10  /* 10 × 1540B = 15KB (was 25, reduced for SRAM budget) */
 #define PBUF_POOL_BUFSIZE       1540
 #define PBUF_LINK_HLEN          14
 #define PBUF_ETH_HLEN           14
