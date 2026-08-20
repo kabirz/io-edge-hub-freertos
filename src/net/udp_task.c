@@ -80,6 +80,7 @@ static bool same_subnet24(const uint8_t rip[4])
  * 端口 8600 由 socket() 的 port 参数绑定, W5500 无独立 bind) */
 static bool udp_sock_open(void)
 {
+	static TickType_t last_wrn; /* 上次 open 失败告警的 tick (0=未告警) */
 	uint8_t sr = SOCK_CLOSED;
 
 	(void)getsockopt(SN_UDP_CFG, SO_STATUS, &sr);
@@ -94,7 +95,13 @@ static bool udp_sock_open(void)
 		LOG_INF("udpcfg: port %u listening", UDP_CFG_PORT);
 		return true;
 	}
-	LOG_WRN("udpcfg: socket open failed");
+	/* 告警限频 <=1 条/10s: 芯片反复异常 (能过 net_ready 但 socket
+	 * 建不起来) 时防日志刷屏; tick 差值无符号回绕安全 */
+	if (last_wrn == 0u ||
+	    (xTaskGetTickCount() - last_wrn) >= pdMS_TO_TICKS(10000u)) {
+		last_wrn = xTaskGetTickCount();
+		LOG_WRN("udpcfg: socket open failed");
+	}
 	return false; /* 下轮 poll 重试 */
 }
 
@@ -107,6 +114,22 @@ static void udp_cfg_task(void *arg)
 	(void)arg;
 
 	for (;;) {
+		/* 网络就绪门控: W5500 init 未成功 (芯片不在位/损坏/
+		 * VERSIONR 校验失败, net_ready 恒 false) 时绝不触碰
+		 * ioLibrary -- vendored ioLibrary 的 socket()/close()/
+		 * sendto() 内含无界寄存器轮询 (socket.c 的
+		 * while(getSn_CR/SR) 等待, 见 337/352/384/393 行等),
+		 * 芯片异常时会挂死本任务 (prio 4), 饿死 mb_tcp(3)/
+		 * history(2)/heartbeat(1) -- heartbeat 是唯一喂狗者,
+		 * 结果 IWDG 30s 复位循环, 违反 main.c 的降级契约
+		 * (无网络时本地 RTU 等照常服务)。500ms 重查, init 成功
+		 * (含运行中重试) 后自动恢复。注: 二期应给 ioLibrary 调用
+		 * 包一层有界监督 (超时放弃), 根除运行中芯片失效的挂死。 */
+		if (!w5500_net_ready()) {
+			vTaskDelay(pdMS_TO_TICKS(500));
+			continue;
+		}
+
 		vTaskDelay(pdMS_TO_TICKS(UDP_CFG_POLL_MS));
 
 		if (!udp_sock_open()) {

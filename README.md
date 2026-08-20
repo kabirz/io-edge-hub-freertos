@@ -28,7 +28,7 @@ STM32F407VET6 上以 FreeRTOS + STM32 HAL + W5500 原样复刻 Zephyr 版
 
 ```
 CMakeLists.txt          固件构建 (stm32-cmake + FreeRTOS + HAL + APP_RELEASE 选项)
-FreeRTOSConfig.h        FreeRTOS 内核配置 (168MHz / tick 1ms / 优先级 5 级)
+FreeRTOSConfig.h        FreeRTOS 内核配置 (168MHz / tick 1ms / 优先级 7 级 0-6, 当前用到 6)
 stm32f4xx_hal_conf.h    HAL 模块裁剪
 VERSION                 版本号 (当前 0.3.0)
 src/

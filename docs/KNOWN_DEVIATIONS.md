@@ -92,10 +92,38 @@
 18. **newlib stdio 全量链接 (+约 80KB text)**。littlefs 拉入
     snprintf/stdio 全家桶。可选优化: 换 `--specs=nano.specs`
     (newlib-nano) 可省 ~数十 KB; 当前 148KB flash 占用远低于 512KB
-    器件容量 (预算 300KB), 一期不裁剪。
+    器件容量 (预算 300KB), SRAM 侧静态占用 (data+bss) 实测
+    ≈ 50KB / 128KB (占 ~39%), 两项余量均充足, 一期不裁剪。
 19. **FC16 尾字节容忍规则 (非偏差)**: 写寄存器数与字节数不一致时
     按字节数处理、忽略尾随字节, 与 Zephyr 版逐字节一致, 写明以防
     上机对比测试误报。
+20. **除 littlefs 外固件无运行时动态分配** (注记, 防误报)。除
+    littlefs 经 `LFS_MALLOC` 路由 heap_4 (第 17 条) 外, 固件无任何
+    运行时动态分配: newlib 的 malloc 依赖路径不可达 —— 日志仅
+    整型/字符串格式化、无 FILE 流, ioLibrary 不 malloc, 故
+    `src/sys/syscalls.c` 的 `_sbrk` 桩恒返回 ENOMEM 的路径同样
+    不可达 (不是缺陷, 是设计约束的体现)。二期新增代码若引入
+    malloc, 须同样显式路由到 heap_4 (同 `lfs_heap.h` 做法)。
+
+## 网络层 (W5500 / ioLibrary)
+
+21. **ioLibrary 调用无超时监督** (一期警示)。vendored ioLibrary 的
+    `socket()`/`close()`/`sendto()` 内含无界寄存器轮询
+    (`while (getSn_CR/SR ...)` 等待, 见 deps/ioLibrary/Ethernet/
+    socket.c), 芯片异常 (寄存器读数恒错/无应答) 时可无限期挂死
+    调用任务。一期对策: udpcfg 任务入口以 `w5500_net_ready()`
+    门控 (init 未成功不触碰 ioLibrary, 见 udp_task.c), mbtcp 以
+    `w5500_link_up()` 门控 (init 失败时 netmon 不启动、链路恒
+    false); **运行中芯片失效** (init 已成功后损坏) 仍可能挂死。
+    二期需为所有 ioLibrary 调用包一层有界监督 (超时返回错误),
+    根除该风险。
+22. **链路断开时 netmon 无锁清 DO 与 FC05 锁内 RMW 并存**
+    (非偏差)。netmon 任务检测到链路下降沿后在不持 Modbus 锁的
+    状态下经 `update_holding_reg` + `mb_set_do` 清零 DO (含影子
+    寄存器 0x00), 与主站 FC05 写 DO 的锁内读-改-写
+    (`io_write_do_bit`) 并存, 理论竞态窗口内后写者胜。与 Zephyr
+    版 `NET_EVENT_IF_DOWN` 回调 (网络上下文同样无锁清 DO) 行为
+    完全一致, 写明防止上机对比测试误报。
 
 ## 环境说明
 
