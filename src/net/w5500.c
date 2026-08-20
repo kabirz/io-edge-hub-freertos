@@ -25,6 +25,7 @@
 
 #include "w5500.h"        /* 本模块对外接口 (include 路径唯一匹配) */
 #include "wizchip_conf.h" /* ioLibrary; 内部路径限定包含 W5500/w5500.h */
+#include "w5500_macraw.h" /* w5500_macraw_set_link (net_mon 边沿同步 netif) */
 
 #include "init.h"
 #include "io_hooks.h"
@@ -175,11 +176,14 @@ static void net_mon_task(void *arg)
 			  ((getPHYCFGR() & PHYCFGR_LNK_ON) != 0);
 
 		if (up && !prev_up) {
+			/* 上升沿: 同步 LwIP netif 链路标志 (ip4_route 依赖) */
+			w5500_macraw_set_link(true);
 			LOG_INF("net link up");
 		} else if (!up && prev_up) {
 			/* 下降沿: DO 全灭 + 影子寄存器清零, 仅边沿触发
 				 * 一次 (对齐 Zephyr NET_EVENT_IF_DOWN 行为;
 				 * mb_set_do = dio.c 强实现, DO+LED 同清) */
+			w5500_macraw_set_link(false);
 			update_holding_reg(HOLDING_DO_IDX, 0);
 			mb_set_do(0);
 			LOG_WRN("net link down");

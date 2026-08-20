@@ -1,9 +1,19 @@
 /*
  * W5500 MACRAW netif driver for LwIP.
  *
- * Socket 0 in MACRAW mode (Sn_MR_MACRAW). Full 16KB RX + 16KB TX buffers.
- * EXTI interrupt on INT pin (PD1) -> counting semaphore -> RX task.
- * 2-byte length header handling with byte-swap and sanity check.
+ * Socket 0 in MACRAW mode, 16KB RX + 16KB TX buffers.
+ * Sn_MR = MACRAW | MFEN | MMB (0xA4): 硬件只收广播 + 目的为本机 MAC 的单播,
+ * 屏蔽网络上的多播风暴 (mDNS/SSDP/WS-Discovery)。MFEN 依据 SHAR 过滤,
+ * netif->hwaddr 必须与 w5500_net_init() 写入 SHAR 的 mac 同源。
+ *
+ * 帧接收时序与 ioLibrary socket.c recvfrom() SOCK_MACRAW 分支一致:
+ *   读 2 字节长度头 -> RECV + 等待 Sn_CR 清零 -> 读帧数据 -> RECV + 等待清零。
+ * 帧头非法 (>1514) 按官方 SOCKFATAL_PACKLEN 策略 close 重开 socket 恢复同步。
+ *
+ * RX 为 10ms 轮询任务。socket 0 的多步命令序列由驱动级互斥保护:
+ * tcpip 线程 (TX, Sn_CR_SEND) 与 rx 任务 (RX, Sn_CR_RECV) 并发写同一个
+ * Sn_CR 寄存器会互相覆盖命令, 导致 RX 指针失步 —— ioLibrary 的 CRIS
+ * 只保护单次 SPI 事务, 保护不了整个命令序列。
  */
 
 #include <string.h>
@@ -15,16 +25,15 @@
 #include "main.h"
 #include "spi.h"
 #include "wizchip_conf.h"
+#include "socket.h"     /* socket, close, SF_ETHER_OWN, SF_MULTI_BLOCK */
 #include "w5500_macraw.h"
 
 #include "init.h"      /* get_holding_reg, HOLDING_IP_OCTET*_IDX */
 
-#include "lwip/init.h"
 #include "lwip/tcpip.h"
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
 #include "lwip/etharp.h"
-#include "netif/ethernet.h"
 
 #include "log.h"
 
@@ -35,25 +44,69 @@
 #define W5500_INT_PORT  GPIOD
 #define W5500_INT_PIN   GPIO_PIN_1
 
+/* 合法以太网帧长上限 (ioLibrary SOCKFATAL_PACKLEN 同值) */
+#define MACRAW_MAX_FRAME  1514
+
 /* RX task config */
-#define MACRAW_RX_PRIO   5
-#define MACRAW_RX_STACK  512  /* 2048 bytes */
+#define MACRAW_RX_PRIO    5
+#define MACRAW_RX_STACK   512  /* 2048 bytes */
+/* 每轮轮询处理的帧数上限: 防止持续流量下高优先级收包饿死 tcpip 线程 */
+#define MACRAW_RX_BURST   32
 
 /* ==================== Forward declarations ==================== */
 static err_t low_level_output(struct netif *netif, struct pbuf *p);
 
 /* ==================== Static state ==================== */
 static struct netif w5500_netif;
+static bool netif_added;   /* netif_add 成功后才允许 set_link */
 static SemaphoreHandle_t rx_sem;
 static StaticSemaphore_t rx_sem_cb;
+/* socket 0 命令序列互斥 (TX/RX 两线程) */
+static SemaphoreHandle_t spi_lock;
+static StaticSemaphore_t spi_lock_cb;
 static StackType_t rx_stack[MACRAW_RX_STACK];
 static StaticTask_t rx_tcb;
 
-/* Debug counters */
+/* Debug counters (RAM 探针, ST-LINK 可读) */
 volatile uint32_t macraw_rx_total;
 volatile uint32_t macraw_rx_ipv4;
 volatile uint32_t macraw_rx_arp;
 volatile uint32_t macraw_rx_other;
+volatile uint32_t macraw_rx_badhdr;
+volatile uint32_t macraw_rx_nobuf;
+
+/* ==================== Socket lock helpers ==================== */
+
+static void macraw_lock(void)
+{
+    if (spi_lock != NULL) {
+        xSemaphoreTake(spi_lock, portMAX_DELAY);
+    }
+}
+
+static void macraw_unlock(void)
+{
+    if (spi_lock != NULL) {
+        xSemaphoreGive(spi_lock);
+    }
+}
+
+/* RECV 命令 + 等待处理完成 (官方时序要求, 不等待会与芯片内部
+ * 指针更新竞争) */
+static void macraw_recv_commit(void)
+{
+    setSn_CR(MACRAW_SN, Sn_CR_RECV);
+    while (getSn_CR(MACRAW_SN) != 0) {
+    }
+}
+
+/* 重开 MACRAW socket (须持有 spi_lock)。用于初始化和失步恢复。 */
+static void macraw_open_socket(void)
+{
+    /* MFEN: 只收广播/多播/自身单播; MMB: 屏蔽多播 => 广播+自身单播 */
+    close(MACRAW_SN);
+    socket(MACRAW_SN, Sn_MR_MACRAW, 0, SF_ETHER_OWN | SF_MULTI_BLOCK);
+}
 
 /* ==================== Low-level: init / output / input ==================== */
 
@@ -67,24 +120,20 @@ static err_t macraw_netif_init(struct netif *netif)
 
 static void low_level_init(struct netif *netif)
 {
-    /* Socket 0 buffers already configured by w5500_net_init (8KB RX/TX).
-     * Just set MAC address and open the MACRAW socket. */
-    netif->hwaddr[0] = 0x00;
-    netif->hwaddr[1] = 0x08;
-    netif->hwaddr[2] = 0xDC;
     netif->hwaddr_len = ETHARP_HWADDR_LEN;
 
-    close(MACRAW_SN);
-    socket(MACRAW_SN, Sn_MR_MACRAW, 0, 0x00);
-
+    macraw_lock();
+    macraw_open_socket();
     uint8_t sr = getSn_SR(MACRAW_SN);
     uint8_t mr = getSn_MR(MACRAW_SN);
-    LOG_INF("MACRAW: SR=0x%02x MR=0x%02x (expect SR=0x42 MR=0x02)", sr, mr);
+    macraw_unlock();
+
+    LOG_INF("MACRAW: SR=0x%02x MR=0x%02x (expect 0x42 / 0xA4)", sr, mr);
     if (sr != SOCK_MACRAW) {
-        LOG_ERR("MACRAW: socket open failed (SR=0x%02x)", getSn_SR(MACRAW_SN));
+        LOG_ERR("MACRAW: socket open failed (SR=0x%02x)", sr);
         return;
     }
-    LOG_INF("MACRAW: socket 0 opened, 16KB RX/TX");
+    LOG_INF("MACRAW: socket 0 open, 16KB RX/TX, filter=own+bcast");
 }
 
 static err_t low_level_output(struct netif *netif, struct pbuf *p)
@@ -92,13 +141,18 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
     struct pbuf *q;
     (void)netif;
 
+    macraw_lock();
+
     /* Wait for socket ready */
     uint32_t t0 = (uint32_t)xTaskGetTickCount();
     while (getSn_SR(MACRAW_SN) != SOCK_MACRAW) {
         if (((uint32_t)xTaskGetTickCount() - t0) > pdMS_TO_TICKS(100)) {
+            macraw_unlock();
             return ERR_IF;
         }
+        macraw_unlock();
         vTaskDelay(1);
+        macraw_lock();
     }
 
     for (q = p; q != NULL; q = q->next) {
@@ -107,11 +161,11 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
     setSn_CR(MACRAW_SN, Sn_CR_SEND);
 
     uint32_t t1 = (uint32_t)xTaskGetTickCount();
-    while (getSn_CR(MACRAW_SN)) {
+    while (getSn_CR(MACRAW_SN) != 0) {
         if (((uint32_t)xTaskGetTickCount() - t1) > pdMS_TO_TICKS(100)) {
+            macraw_unlock();
             return ERR_TIMEOUT;
         }
-        vTaskDelay(1);
     }
 
     uint8_t ir = getSn_IR(MACRAW_SN);
@@ -119,12 +173,18 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
         setSn_IR(MACRAW_SN, Sn_IR_SENDOK);
     } else if (ir & Sn_IR_TIMEOUT) {
         setSn_IR(MACRAW_SN, Sn_IR_TIMEOUT);
+        macraw_unlock();
         LOG_WRN("MACRAW TX: timeout");
         return ERR_TIMEOUT;
     }
+    macraw_unlock();
     return ERR_OK;
 }
 
+/*
+ * 读取一帧。返回 pbuf (交给 netif->input), 无数据或异常恢复后返回 NULL。
+ * 时序与 ioLibrary recvfrom() SOCK_MACRAW 分支一致。
+ */
 static struct pbuf *low_level_input(void)
 {
     uint16_t rsr = getSn_RX_RSR(MACRAW_SN);
@@ -132,34 +192,54 @@ static struct pbuf *low_level_input(void)
         return NULL;
     }
 
-    /* 一次性读取整个帧 (2-byte header + payload) 到临时缓冲区。
-     * MACRAW 帧最大 1514B (不含 header), 加 2B header = 1516B。
-     * 用栈上缓冲区一次性读取避免 wiz_recv_data 分次读导致指针错位。 */
-    uint8_t buf[1520];
-    uint16_t toread = (rsr > sizeof(buf)) ? (uint16_t)sizeof(buf) : rsr;
-    wiz_recv_data(MACRAW_SN, buf, toread);
-    setSn_CR(MACRAW_SN, Sn_CR_RECV);
+    macraw_lock();
 
-    /* 解析 2-byte big-endian length header */
-    uint16_t hdr = (uint16_t)((buf[0] << 8) | buf[1]);
-    uint16_t framelen = hdr - 2;
+    /* Step 1: 读 2 字节 MACRAW 长度头, 立即 RECV 提交并等待 */
+    uint8_t hdr_buf[2];
+    wiz_recv_data(MACRAW_SN, hdr_buf, 2);
+    macraw_recv_commit();
 
-    if (framelen == 0 || framelen > 32000 || (2 + framelen) > toread) {
-        LOG_WRN("MACRAW RX: bad hdr=0x%04x rsr=%u read=%u", hdr, rsr, toread);
+    uint16_t hdr = (uint16_t)((hdr_buf[0] << 8) | hdr_buf[1]);
+    uint16_t framelen = hdr - 2; /* 长度头包含自身 2 字节 */
+
+    if (framelen == 0 || framelen > MACRAW_MAX_FRAME) {
+        /* 官方 SOCKFATAL_PACKLEN 策略: 指针已失步, close 重开恢复 */
+        macraw_rx_badhdr++;
+        LOG_WRN("MACRAW RX: bad hdr=0x%04x rsr=%u, reopen", hdr, rsr);
+        macraw_open_socket();
+        macraw_unlock();
         return NULL;
     }
 
+    /* Step 2: 读帧数据 (pbuf 不足则丢帧) 再 RECV 提交 */
     struct pbuf *p = pbuf_alloc(PBUF_RAW, framelen, PBUF_POOL);
     if (p == NULL) {
-        LOG_WRN("MACRAW RX: pbuf alloc fail (%u)", framelen);
+        macraw_rx_nobuf++;
+        wiz_recv_ignore(MACRAW_SN, framelen);
+        macraw_recv_commit();
+        macraw_unlock();
         return NULL;
     }
 
     struct pbuf *q;
-    uint16_t offset = 2; /* skip header */
     for (q = p; q != NULL; q = q->next) {
-        memcpy(q->payload, &buf[offset], q->len);
-        offset += q->len;
+        wiz_recv_data(MACRAW_SN, (uint8_t *)q->payload, q->len);
+    }
+    macraw_recv_commit();
+
+    macraw_unlock();
+
+    macraw_rx_total++;
+    if (p->tot_len >= 14) {
+        uint16_t ethertype = ((uint8_t *)p->payload)[12] << 8 |
+                             ((uint8_t *)p->payload)[13];
+        if (ethertype == 0x0800) {
+            macraw_rx_ipv4++;
+        } else if (ethertype == 0x0806) {
+            macraw_rx_arp++;
+        } else {
+            macraw_rx_other++;
+        }
     }
     return p;
 }
@@ -184,29 +264,18 @@ static void macraw_rx_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        /* 轮询模式: 每 10ms 检查 W5500 INT 引脚 (PD1, 低电平有效)
-         * 和 socket RX 缓冲区。比 EXTI 更可靠 (避免中断优先级问题)。 */
+        /* 轮询: 每 10ms 检查 socket RX 缓冲 (EXTI 中断在当前板上不可靠) */
         vTaskDelay(pdMS_TO_TICKS(10));
 
-        /* 检查是否有数据在 MACRAW socket 缓冲区 */
-        uint16_t rsr = getSn_RX_RSR(MACRAW_SN);
-        if (rsr == 0) {
+        if (getSn_RX_RSR(MACRAW_SN) == 0) {
             continue;
         }
 
-        for (;;) {
+        uint32_t budget = MACRAW_RX_BURST;
+        while (budget-- > 0) {
             struct pbuf *p = low_level_input();
             if (p == NULL) {
                 break;
-            }
-            LOG_INF("MACRAW RX: frame %u bytes", p->tot_len);
-            macraw_rx_total++;
-            if (p->tot_len >= 14) {
-                uint16_t ethertype = ((uint8_t *)p->payload)[12] << 8 |
-                                     ((uint8_t *)p->payload)[13];
-                if (ethertype == 0x0800) macraw_rx_ipv4++;
-                else if (ethertype == 0x0806) macraw_rx_arp++;
-                else macraw_rx_other++;
             }
             if (w5500_netif.input(p, &w5500_netif) != ERR_OK) {
                 pbuf_free(p);
@@ -220,7 +289,9 @@ static void macraw_rx_task(void *arg)
 bool w5500_macraw_init(const uint8_t mac[6])
 {
     ip4_addr_t ip_addr, netmask, gw;
-    (void)mac;
+
+    /* 互斥先建: 后续所有 socket 0 访问都在保护下 */
+    spi_lock = xSemaphoreCreateMutexStatic(&spi_lock_cb);
 
     rx_sem = xSemaphoreCreateCountingStatic(0xFFFF, 0, &rx_sem_cb);
     if (rx_sem == NULL) {
@@ -248,16 +319,34 @@ bool w5500_macraw_init(const uint8_t mac[6])
     }
     IP4_ADDR(&netmask, 255, 255, 255, 0);
 
+    /* hwaddr 与 w5500_net_init 写入 SHAR 的 mac 同源
+     * (MFEN 硬件过滤按 SHAR 比对目的地址) */
+    memcpy(w5500_netif.hwaddr, mac, 6);
+
     low_level_init(&w5500_netif);
 
+    /* netif RAW API 要求 core lock 持有者调用 (tcpip 线程已运行) */
+    LOCK_TCPIP_CORE();
+    bool link_now = ((getPHYCFGR() & PHYCFGR_LNK_ON) != 0);
     if (!netif_add(&w5500_netif, &ip_addr, &netmask, &gw,
                     NULL, macraw_netif_init, tcpip_input)) {
+        UNLOCK_TCPIP_CORE();
         LOG_ERR("MACRAW: netif_add failed");
         return false;
     }
     netif_set_default(&w5500_netif);
     netif_set_up(&w5500_netif);
-    LOG_INF("MACRAW: netif up, IP %s", ip4addr_ntoa(&ip_addr));
+    netif_added = true;
+
+    /* ip4_route 要求 netif link-up 才参与路由; 不设置则所有
+     * UDP/TCP 应答报 "No route"。初始状态按 PHY 实际链路设置,
+     * 之后由 net_mon_task (w5500.c) 的边沿调用 set_link 更新。 */
+    if (link_now) {
+        netif_set_link_up(&w5500_netif);
+    }
+    UNLOCK_TCPIP_CORE();
+    LOG_INF("MACRAW: netif up, IP %s link=%s", ip4addr_ntoa(&ip_addr),
+            link_now ? "up" : "down");
 
     xTaskCreateStatic(macraw_rx_task, "macraw_rx", MACRAW_RX_STACK,
                       NULL, MACRAW_RX_PRIO, rx_stack, &rx_tcb);
@@ -267,4 +356,25 @@ bool w5500_macraw_init(const uint8_t mac[6])
 bool w5500_macraw_link_up(void)
 {
     return netif_is_link_up(&w5500_netif);
+}
+
+/* PHY 链路状态变化 (net_mon_task 500ms 轮询边沿调用) */
+static void macraw_set_link_cb(void *arg)
+{
+    bool up = ((uintptr_t)arg != 0);
+
+    if (up && !netif_is_link_up(&w5500_netif)) {
+        netif_set_link_up(&w5500_netif);
+    } else if (!up && netif_is_link_up(&w5500_netif)) {
+        netif_set_link_down(&w5500_netif);
+    }
+}
+
+void w5500_macraw_set_link(bool up)
+{
+    if (!netif_added) {
+        return;
+    }
+    /* netif_set_link_* 须持 core lock: 转到 tcpip 线程执行 */
+    tcpip_callback(macraw_set_link_cb, (void *)(uintptr_t)(up ? 1u : 0u));
 }

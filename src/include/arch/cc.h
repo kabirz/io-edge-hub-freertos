@@ -12,8 +12,8 @@
 #endif
 
 #define LWIP_PROVIDE_ERRNO 1
-#define LWIP_PLATFORM_DIAG(x)
-#define LWIP_PLATFORM_ASSERT(x)
+#define LWIP_PLATFORM_DIAG(x)   do { printf x; } while(0)
+#define LWIP_PLATFORM_ASSERT(x) do { printf("LWIP_ASSERT: %s\n", x); for(;;){} } while(0)
 
 /* Pack struct declarations */
 #define PACK_STRUCT_BEGIN

@@ -26,6 +26,11 @@
 #define UDP_CFG_PORT       8600u
 #define UDP_CFG_BCAST_PORT (UDP_CFG_PORT + 1u)
 
+/* 诊断探针: 回调调用计数 (可在 RAM 中通过 ST-LINK 读取) */
+volatile uint32_t udp_recv_calls;
+volatile uint32_t udp_recv_bytes;
+
+
 static struct udp_pcb *cfg_pcb;
 
 /* FACTORY_RESET 两步确认计时源: tick -> ms */
@@ -48,12 +53,16 @@ static bool same_subnet24(const ip_addr_t *addr)
 static void udp_cfg_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
                           const ip_addr_t *src_addr, u16_t src_port)
 {
+    udp_recv_calls++;
     (void)arg;
     (void)pcb;
+    (void)src_addr;
+    (void)src_port;
 
     if (p == NULL || p->tot_len == 0) {
         return;
     }
+    udp_recv_bytes += p->tot_len;
 
     /* 提取命令字节 (第一个字节) */
     uint8_t cmd = 0;
@@ -106,8 +115,8 @@ static void udp_cfg_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     }
 }
 
-/* tcpip 回调: 在 tcpip 线程上下文中绑定 UDP PCB,
- * 确保 PCB 注册与帧处理在同一线程。 */
+/* tcpip 回调: RAW API (udp_new/bind/recv) 不持 core lock,
+ * 须在 tcpip 线程上下文执行, 避免与 udp_input 遍历 udp_pcbs 竞态 */
 static void udp_cfg_init_cb(void *arg)
 {
     (void)arg;
@@ -126,14 +135,13 @@ static void udp_cfg_init_cb(void *arg)
     }
 
     udp_recv(cfg_pcb, udp_cfg_recv, NULL);
-    LOG_INF("udpcfg: port %u listening (LwIP)", UDP_CFG_PORT);
+    LOG_INF("udpcfg: port %u listening (LwIP) pcb=%p recv=%p",
+            UDP_CFG_PORT, (void *)cfg_pcb, (void *)cfg_pcb->recv);
 }
 
 void udp_cfg_start(void)
 {
     udp_now_ms = udp_now_ms_target;
 
-    /* 必须在 tcpip 线程上下文中完成 PCB 绑定,
-     * 否则帧处理与 PCB 注册可能竞争。 */
     tcpip_callback(udp_cfg_init_cb, NULL);
 }

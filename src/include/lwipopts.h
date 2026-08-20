@@ -11,8 +11,8 @@
  *   Total LwIP:             ~62.5 KB
  */
 
-#ifndef LWIP_Hkıl_LWIPOPTS_H
-#define LWIP_H_kil_LWIPOPTS_H
+#ifndef LWIPOPTS_H
+#define LWIPOPTS_H
 
 /* ---- Platform ---- */
 #define NO_SYS                  0
@@ -34,7 +34,9 @@
 #define TCP_SLOW_INTERVAL       500
 
 /* ---- Tcpip thread ---- */
-#define TCPIP_THREAD_STACKSIZE  512   /* 2048 bytes (in words) */
+#define TCPIP_THREAD_STACKSIZE  1024  /* 4096 bytes (in words); UDP 回调+发送链
+                                           * (udp_input -> app -> udp_sendto ->
+                                           * ip4_route) 深栈, 2KB 会溢出 */
 #define TCPIP_THREAD_PRIO       4
 #define TCPIP_MBOX_SIZE         8     /* tcpip thread mailbox slots */
 
@@ -54,7 +56,7 @@
 /* ---- Pbuf ---- */
 /* pbuf pool in CCM (64KB, no DMA limitation).
  * PBUF_POOL_BUFSIZE must >= 1500 + PBUF_LINK_HLEN (14) for full Ethernet frame. */
-#define PBUF_POOL_SIZE          10  /* 10 × 1540B = 15KB (was 25, reduced for SRAM budget) */
+#define PBUF_POOL_SIZE          16  /* 16 × 1540B ≈ 24.6KB, 在 CCM (64KB) 内 */
 #define PBUF_POOL_BUFSIZE       1540
 #define PBUF_LINK_HLEN          14
 #define PBUF_ETH_HLEN           14
@@ -83,8 +85,14 @@
 #define CHECKSUM_CHECK_TCP      1
 #define CHECKSUM_CHECK_ICMP     1
 
-/* ---- Debug (disabled in release) ---- */
+/* ---- Debug ---- */
+/* 调试期曾开启 (printf 诊断在 tcpip 线程同步执行, 每包数十 ms 延迟),
+ * 已完成 UDP/MACRAW bring-up, 关闭。需要时改回 1 + 打开模块开关。 */
 #define LWIP_DEBUG              0
+#define LWIP_DBG_TYPES_ON       LWIP_DBG_OFF
+#define LWIP_DBG_MIN_LEVEL      0
+#define UDP_DEBUG               LWIP_DBG_OFF
+#define IP_DEBUG                LWIP_DBG_OFF
 
 /* ---- Statistics ---- */
 #define LWIP_STATS              0
@@ -97,4 +105,4 @@
 #define ARP_TABLE_SIZE          10
 #define ARP_QUEUEING            0
 
-#endif /* LWIP_H_kil_LWIPOPTS_H */
+#endif /* LWIPOPTS_H */

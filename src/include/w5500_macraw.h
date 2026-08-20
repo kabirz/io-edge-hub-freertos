@@ -20,4 +20,7 @@ bool w5500_macraw_init(const uint8_t mac[6]);
 /* Check if MACRAW netif is up (link + initialized) */
 bool w5500_macraw_link_up(void);
 
+/* PHY 链路状态变化通知 (net_mon_task 轮询边沿调用; 初始化前为无操作) */
+void w5500_macraw_set_link(bool up);
+
 #endif /* W5500_MACRAW_H */
