@@ -5,6 +5,10 @@
  * udp_now_ms 绑可控计数器; 链接 udp_cfg.c + regmap.c + config_store.c +
  * fake_flash.c。
  *
+ * 0x19 确认步契约: 命令层只置 udp_cfg_reboot_pending() 标志并返回
+ * 应答 (不刷不重启); fake_transport_post_reply() 模拟 udp_task.c 传输层
+ * "sendto 之后" 的动作 (查标志 -> history_sync + io_reboot_cold)。
+ *
  * 版本经 tests/CMakeLists 注入: FW_VERSION_MAJOR=0 MINOR=3 PATCH=0。
  */
 #include "test_util.h"
@@ -53,6 +57,17 @@ static void fakes_reset(void)
     fake_ts_val = 0;
     fake_ts_calls = 0;
     fake_ms = 0;
+}
+
+/* 模拟传输层契约 (src/net/udp_task.c): 应答 sendto 上线之后查
+ * udp_cfg_reboot_pending(), 为真才 history_sync + io_reboot_cold
+ * (真实 io_reboot_cold 不返回; 顺序证据经 seq_sync/seq_reboot 校验) */
+static void fake_transport_post_reply(void)
+{
+    if (udp_cfg_reboot_pending()) {
+        history_sync();
+        io_reboot_cold();
+    }
 }
 
 /* 假 flash + config_store 复位 (holding_reg 数组是静态状态, 用例按序书写) */
@@ -220,23 +235,49 @@ int main(void)
     TEST_EQ_INT(rn, 2);
     TEST_EQ_INT(rep[0], 0x19);
     TEST_EQ_INT(rep[1], 0x00);
+    TEST_ASSERT(udp_cfg_reboot_pending() == false);
     TEST_EQ_INT(fake_sync_calls, 0);
     TEST_EQ_INT(fake_reboots, 0);
     config_store_init(fake_flash_get());
     config_store_get(&c);
     TEST_EQ_INT(c.di_si, 77); /* 未擦除 */
+    fake_transport_post_reply(); /* 标志未置: 传输层不动 */
+    TEST_EQ_INT(fake_sync_calls, 0);
+    TEST_EQ_INT(fake_reboots, 0);
 
     fake_ms = 13000; /* +3000ms <= 5000: 确认步 */
     rn = udp_app_cmd(0x19, NULL, 0, rep, sizeof(rep));
     TEST_EQ_INT(rn, 2);
     TEST_EQ_INT(rep[0], 0x19);
     TEST_EQ_INT(rep[1], 0x01);
+    TEST_ASSERT(udp_cfg_reboot_pending() == true); /* 重启移交传输层 */
+    TEST_EQ_INT(fake_sync_calls, 0); /* 命令层自身不刷不重启 */
+    TEST_EQ_INT(fake_reboots, 0);
     config_store_init(fake_flash_get());
     config_store_get(&c);
     TEST_EQ_INT(c.di_si, 200); /* 已擦除回默认 (erase_all 生效) */
+    /* 传输层: sendto 之后 sync -> reboot (顺序对齐 Zephyr) */
+    fake_transport_post_reply();
     TEST_EQ_INT(fake_sync_calls, 1);
     TEST_EQ_INT(fake_reboots, 1);
     TEST_ASSERT(seq_sync < seq_reboot); /* 先刷历史后重启 */
+
+    /* ---- 9b. 契约用例: 确认步 0x19 -> 应答返回 AND reboot_pending
+     * 置位; 标志仅由 udp_cfg_reset_pending (重新上电) 复位 ---- */
+    udp_cfg_reset_pending();
+    fakes_reset();
+    fake_ms = 100000;
+    rn = udp_app_cmd(0x19, NULL, 0, rep, sizeof(rep));
+    TEST_EQ_INT(rep[1], 0x00);
+    TEST_ASSERT(udp_cfg_reboot_pending() == false);
+    fake_ms = 101000; /* +1000ms: 确认步 */
+    rn = udp_app_cmd(0x19, NULL, 0, rep, sizeof(rep));
+    TEST_EQ_INT(rn, 2); /* 应答照常返回, 不被重启吞掉 */
+    TEST_EQ_INT(rep[0], 0x19);
+    TEST_EQ_INT(rep[1], 0x01);
+    TEST_ASSERT(udp_cfg_reboot_pending() == true);
+    udp_cfg_reset_pending(); /* 模拟重新上电清除待办 */
+    TEST_ASSERT(udp_cfg_reboot_pending() == false);
 
     /* ---- 10. FACTORY_RESET 超 5s: 第二条只重记时; 第三条才确认 ---- */
     udp_cfg_reset_pending();
@@ -245,16 +286,21 @@ int main(void)
     rn = udp_app_cmd(0x19, NULL, 0, rep, sizeof(rep));
     TEST_EQ_INT(rn, 2);
     TEST_EQ_INT(rep[1], 0x00);
+    TEST_ASSERT(udp_cfg_reboot_pending() == false);
     fake_ms = 25001; /* +5001ms > 5000: 重新计时 */
     rn = udp_app_cmd(0x19, NULL, 0, rep, sizeof(rep));
     TEST_EQ_INT(rn, 2);
     TEST_EQ_INT(rep[1], 0x00);
+    TEST_ASSERT(udp_cfg_reboot_pending() == false);
     TEST_EQ_INT(fake_reboots, 0);
     TEST_EQ_INT(fake_sync_calls, 0);
     fake_ms = 28000; /* +2999ms: 确认步 */
     rn = udp_app_cmd(0x19, NULL, 0, rep, sizeof(rep));
     TEST_EQ_INT(rn, 2);
     TEST_EQ_INT(rep[1], 0x01);
+    TEST_ASSERT(udp_cfg_reboot_pending() == true);
+    TEST_EQ_INT(fake_reboots, 0); /* 命令层不重启 */
+    fake_transport_post_reply();
     TEST_EQ_INT(fake_reboots, 1);
 
     /* ---- 10b. 边界: 距首步恰好 5000ms (非 >5000) 即确认 ---- */
@@ -267,6 +313,8 @@ int main(void)
     rn = udp_app_cmd(0x19, NULL, 0, rep, sizeof(rep));
     TEST_EQ_INT(rn, 2);
     TEST_EQ_INT(rep[1], 0x01);
+    TEST_ASSERT(udp_cfg_reboot_pending() == true);
+    fake_transport_post_reply();
     TEST_EQ_INT(fake_reboots, 1);
 
     /* ---- 11. 怪癖: 开机 5s 内首条命令即确认 (单命令立即执行) ---- */
@@ -277,6 +325,10 @@ int main(void)
     TEST_EQ_INT(rn, 2);
     TEST_EQ_INT(rep[0], 0x19);
     TEST_EQ_INT(rep[1], 0x01);
+    TEST_EQ_INT(fake_sync_calls, 0); /* 命令层只置标志 */
+    TEST_EQ_INT(fake_reboots, 0);
+    TEST_ASSERT(udp_cfg_reboot_pending() == true);
+    fake_transport_post_reply();
     TEST_EQ_INT(fake_sync_calls, 1);
     TEST_EQ_INT(fake_reboots, 1);
 
@@ -287,6 +339,8 @@ int main(void)
     rn = udp_app_cmd(0x19, NULL, 0, rep, sizeof(rep));
     TEST_EQ_INT(rn, 2);
     TEST_EQ_INT(rep[1], 0x01);
+    TEST_ASSERT(udp_cfg_reboot_pending() == true);
+    fake_transport_post_reply();
     TEST_EQ_INT(fake_reboots, 1);
     udp_cfg_reset_pending();
     fakes_reset();
@@ -294,6 +348,7 @@ int main(void)
     rn = udp_app_cmd(0x19, NULL, 0, rep, sizeof(rep));
     TEST_EQ_INT(rn, 2);
     TEST_EQ_INT(rep[1], 0x00);
+    TEST_ASSERT(udp_cfg_reboot_pending() == false);
     TEST_EQ_INT(fake_reboots, 0);
 
     /* ---- 12. 未知命令静默 (含 0x01-0x06 固件升级, 一期无 MCUboot) ---- */
@@ -310,6 +365,7 @@ int main(void)
         /* 静默路径不产生任何副作用 */
         TEST_EQ_INT(fake_reboots, 0);
         TEST_EQ_INT(fake_sync_calls, 0);
+        TEST_ASSERT(udp_cfg_reboot_pending() == false);
     }
 
     /* ---- 13. 跨网段白名单: 仅 GET_IP 0x11 ---- */

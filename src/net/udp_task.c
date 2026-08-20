@@ -23,6 +23,10 @@
  *   - 跨网段: 命令在 udp_cmd_bcast_allowed 白名单 (仅 GET_IP 网络发现)
  *     才执行, 应答广播到 255.255.255.255:8601 (config+1); 白名单外
  *     静默丢弃 -- 不执行不应答 (避免跨网段误触发配置/复位)。
+ *   - FACTORY_RESET 确认步: udp_app_cmd 只擦配置 + 置
+ *     udp_cfg_reboot_pending() 标志; 应答 sendto 上线之后本层才
+ *     history_sync() + io_reboot_cold() (对齐 Zephyr udp.c 顺序:
+ *     sendto -> sync -> 100ms -> reboot)。
  *
  * 广播接收: socket() 不带 SF_BROAD_BLOCK, W5500 默认接收目的端口 8600
  * 的广播报文 (上位机跨网段发现走此路径)。
@@ -42,6 +46,7 @@
 #include "w5500.h"  /* SN_UDP_CFG / socket 布局 (src/include) */
 #include "udp_cfg.h"
 #include "init.h"
+#include "io_hooks.h" /* history_sync / io_reboot_cold (0x19 重启路径) */
 
 /* LOG 占位 (Task 13 替换为真实日志) */
 #define LOG_INF(...) do {} while (0)
@@ -159,6 +164,15 @@ static void udp_cfg_task(void *arg)
 				(void)sendto(SN_UDP_CFG, rep, rlen,
 					     (uint8_t *)bcast_ip,
 					     UDP_CFG_BCAST_PORT);
+			}
+
+			/* FACTORY_RESET 确认步 (契约见 udp_cfg.h): 应答已
+			 * 上线, 现在刷历史 + 冷重启 -- 顺序对齐 Zephyr
+			 * (sendto -> sync -> 100ms -> reboot, 延时与不复
+			 * 返回在 io_reboot_cold 实现内) */
+			if (udp_cfg_reboot_pending()) {
+				history_sync();
+				io_reboot_cold();
 			}
 		}
 	}

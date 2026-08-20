@@ -17,15 +17,16 @@
  *
  * 与 Zephyr 版的差异:
  *   - udp_fw_reply() (库 RX 线程内同步 sendto) -> 写调用方 reply 缓冲
- *     并返回长度, 实际发送在 udp_task.c; 因此确认步的 [0x19][01] 在
- *     target 上要等 udp_app_cmd 返回后才 sendto, 而 io_reboot_cold()
- *     在本函数内就触发 (其 100ms 延时也在其中) -- 应答大概率上不了线
- *     (Zephyr 是先 sendto 再重启)。上位机以 "应答超时 + 设备重启掉线"
- *     判定复位完成; 已在任务报告记录。
+ *     并返回长度, 实际发送在 udp_task.c。0x19 确认步的顺序契约
+ *     (见 udp_cfg_reboot_pending 注释): 本层只 擦除 -> 写应答 -> 置
+ *     重启待办标志; 传输层把应答 sendto 上线之后才 history_sync() +
+ *     io_reboot_cold() -- 对齐 Zephyr "应答 -> 刷历史 -> 100ms ->
+ *     重启" 顺序, 保证 [0x19][01] 先上线 (在本层直接重启会把应答
+ *     一起带走)。
  *   - settings_factory_reset() 带错误码 -> config_store_erase_all()
  *     无返回值: ok 恒 1 (本端口擦除 API 无失败信号)。
  *   - 100ms 重启前延时移入 target 的 io_reboot_cold() 实现 (Task 13),
- *     本模块按 擦除 -> 应答 -> history_sync -> io_reboot_cold 直落。
+ *     由传输层在 history_sync 之后调用。
  */
 
 #include <stdint.h>
@@ -75,11 +76,19 @@ static uint16_t reply_ok(uint8_t *reply, uint16_t cap, uint8_t cmd, uint8_t ok)
  * uint32 减法对回绕安全 (真实流逝 < 2^32 ms 时差值正确)。 */
 static uint32_t factory_reset_pending_ms;
 static bool factory_reset_confirmed;
+/* 确认步已执行: 传输层重启待办标志 (契约见 udp_cfg_reboot_pending) */
+static volatile bool factory_reset_reboot_pending;
 
 void udp_cfg_reset_pending(void)
 {
 	factory_reset_pending_ms = 0;
 	factory_reset_confirmed = false;
+	factory_reset_reboot_pending = false;
+}
+
+bool udp_cfg_reboot_pending(void)
+{
+	return factory_reset_reboot_pending;
 }
 
 static uint16_t udp_factory_reset(uint8_t *reply, uint16_t cap, uint8_t cmd)
@@ -96,15 +105,15 @@ static uint16_t udp_factory_reset(uint8_t *reply, uint16_t cap, uint8_t cmd)
 		factory_reset_confirmed = true;
 	}
 
-	/* 确认步 (5s 内第二条, 或开机 5s 内首条): 擦配置 -> 应答 ->
-	 * 刷历史 -> 冷重启 (100ms 延时在 io_reboot_cold 实现内) */
+	/* 确认步 (5s 内第二条, 或开机 5s 内首条): 擦配置 -> 写应答 -> 置
+	 * 传输层重启待办。history_sync + io_reboot_cold 不在本层调用:
+	 * 传输层必须先把 [0x19][01] sendto 上线, 再按标志执行 (Zephyr
+	 * 顺序: 应答 -> 刷历史 -> 100ms -> 重启; 延时在 io_reboot_cold
+	 * 实现内), 否则应答随重启丢失。 */
 	config_store_erase_all();
 	factory_reset_confirmed = false;
-	uint16_t rlen = reply_ok(reply, cap, cmd, 1);
-
-	history_sync();
-	io_reboot_cold();
-	return rlen;
+	factory_reset_reboot_pending = true;
+	return reply_ok(reply, cap, cmd, 1);
 }
 
 /* ==================== 命令分发 ==================== */

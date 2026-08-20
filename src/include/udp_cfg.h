@@ -44,8 +44,17 @@ uint16_t udp_app_cmd(uint8_t cmd, const uint8_t *data, uint16_t len,
  * 接收时被 udp_task 静默丢弃 -- 不执行不应答。 */
 bool udp_cmd_bcast_allowed(uint8_t cmd);
 
-/* FACTORY_RESET 两步确认状态复位 (模拟重新上电; host 测试钩子) */
+/* FACTORY_RESET 两步确认状态复位, 含重启待办标志 (模拟重新上电;
+ * host 测试钩子) */
 void udp_cfg_reset_pending(void);
+
+/* FACTORY_RESET 确认步已执行 (重启待办)。传输层契约: 必须先把
+ * udp_app_cmd 返回的应答 sendto 上线, 然后查询本标志 -- 为真时调用
+ * history_sync() + io_reboot_cold() (对齐 Zephyr udp.c 顺序: 应答 ->
+ * 刷历史 -> 100ms -> 重启, 延时在 io_reboot_cold 实现内)。命令层不
+ * 自行重启, 否则 [0x19][01] 随重启上不了线。真实重启不返回, 标志仅由
+ * 重新上电 (udp_cfg_reset_pending) 复位。 */
+bool udp_cfg_reboot_pending(void);
 
 /* 毫秒时钟钩子 (FACTORY_RESET 两步确认计时源, Zephyr k_uptime_get 的
  * 对应物)。target 由 udp_cfg_start() 绑 xTaskGetTickCount 换算值;
