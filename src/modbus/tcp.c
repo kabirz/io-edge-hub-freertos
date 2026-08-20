@@ -57,9 +57,7 @@
 #include "init.h"
 #include "io_bytes.h"
 
-/* LOG 占位 (Task 13 替换为真实日志) */
-#define LOG_INF(...) do {} while (0)
-#define LOG_WRN(...) do {} while (0)
+#include "log.h"
 
 #define MODBUS_TCP_PORT 502
 

@@ -36,9 +36,7 @@
 #include "rtu_frame.h"
 #include "init.h"
 
-/* LOG 占位 (Task 13 替换为真实日志) */
-#define LOG_WRN(...) do {} while (0)
-#define LOG_INF(...) do {} while (0)
+#include "log.h"
 
 /* ==================== 板级定义 ==================== */
 

@@ -35,9 +35,7 @@
 #include "fw_version.h"
 #endif
 
-/* LOG 占位 (Task 13 替换为真实日志) */
-#define LOG_WRN(...) do {} while (0)
-#define LOG_INF(...) do {} while (0)
+#include "log.h"
 
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))

@@ -48,9 +48,7 @@
 #include "init.h"
 #include "io_hooks.h" /* history_sync / io_reboot_cold (0x19 重启路径) */
 
-/* LOG 占位 (Task 13 替换为真实日志) */
-#define LOG_INF(...) do {} while (0)
-#define LOG_WRN(...) do {} while (0)
+#include "log.h"
 
 #define UDP_CFG_PORT       8600u /* 配置端口 (Zephyr CONFIG_UDP_FW_CONFIG_PORT) */
 #define UDP_CFG_BCAST_PORT (UDP_CFG_PORT + 1u) /* 跨网段应答端口 (config+1) */

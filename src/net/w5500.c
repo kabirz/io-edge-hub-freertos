@@ -31,9 +31,7 @@
 #include "init.h"
 #include "io_hooks.h"
 
-/* LOG 占位 (Task 13 替换为真实日志) */
-#define LOG_WRN(...) do {} while (0)
-#define LOG_INF(...) do {} while (0)
+#include "log.h"
 
 /* ==================== W5500 板级引脚 / 时序 ==================== */
 /* RST PD0: 输出, 空闲高, 低电平复位 (复位脚归本驱动管理, 与 SPI 总线

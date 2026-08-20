@@ -41,12 +41,18 @@ uint32_t io_now_epoch(void);
 /* ==================== 重启 (sys/reboot.c) ==================== */
 /* 冷重启 (Zephyr 版 regmap 里 reboot 前的 k_msleep(100) 延时移到本实现内) */
 void io_reboot_cold(void);
+/* 延迟重启待办 (RAM volatile bool, 对齐 Zephyr main.c; Zephyr 版由
+ * web/shell 置位、主循环轮询, 本版由心跳任务轮询) */
+void set_reboot_status(bool en);
+bool get_reboot_status(void);
 
 /* ==================== 寄存器并发保护 (sys/os.c) ==================== */
 /* FreeRTOS 互斥锁; host 测试为空实现。仅 io_write_do_bit 的读-改-写与
  * holding_reg_save 的全量导出持锁 (单字读写本身原子, 不加锁) */
 void io_lock(void);
 void io_unlock(void);
+/* 互斥锁创建: main 建任务前调用一次; 之前的 io_lock 直通 (无并发) */
+void os_init(void);
 
 #ifdef __cplusplus
 }

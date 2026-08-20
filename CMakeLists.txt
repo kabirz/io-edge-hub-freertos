@@ -30,6 +30,11 @@ set(APP_SOURCES
     src/board/spi.c
     src/board/stm32f4xx_hal_timebase_tim.c
     src/sys/syscalls.c
+    src/sys/time.c
+    src/sys/watchdog.c
+    src/sys/reboot.c
+    src/sys/log.c
+    src/sys/os.c
     src/util/io_bytes.c
     src/util/io_crc.c
     src/storage/config_store.c
@@ -104,6 +109,7 @@ target_link_libraries(fw.elf PRIVATE
     HAL::STM32::F4::CAN
     HAL::STM32::F4::IWDG
     HAL::STM32::F4::RTC
+    HAL::STM32::F4::RTCEx # HAL_RTCEx_BKUPRead/Write (time.c 备份域标志)
     HAL::STM32::F4::TIM
     HAL::STM32::F4::TIMEx
     HAL::STM32::F4::PWR

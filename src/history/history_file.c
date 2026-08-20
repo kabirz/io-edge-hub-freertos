@@ -29,10 +29,7 @@
 #include <time.h>
 #include "history_file.h"
 
-/* LOG 占位 (Task 13 替换为真实日志; 调用点对齐 Zephyr 版) */
-#define LOG_ERR(...) do {} while (0)
-#define LOG_WRN(...) do {} while (0)
-#define LOG_INF(...) do {} while (0)
+#include "log.h" /* LOG_* (host 测试经 LOG_ENABLE=0 编译为空) */
 
 #define HIST_MAX_FILES 10
 #ifndef HIST_FILE_MAX

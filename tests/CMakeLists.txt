@@ -9,6 +9,8 @@ function(io_test name)
   add_executable(${name} ${ARGN})
   target_include_directories(${name} PRIVATE ${SRC}/include ${SRC} ${CMAKE_CURRENT_SOURCE_DIR})
   target_compile_options(${name} PRIVATE -Wall -Wextra -O1)
+  # log.h 默认开 (调 log_write, target-only); host 统一编译为空宏
+  target_compile_definitions(${name} PRIVATE LOG_ENABLE=0)
   add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
@@ -61,6 +63,11 @@ io_test(test_udp_cfg test_udp_cfg.c fake_flash.c
 target_compile_definitions(test_udp_cfg PRIVATE
   FW_VERSION_MAJOR=0 FW_VERSION_MINOR=3 FW_VERSION_PATCH=0
   FW_GIT_VERSION="\"test\"")
+
+# sys/time: ts_in_range 纯函数边界 (HAL/RTC 部分经 HOST_TEST 分离,
+# 不参与 host 编译; set_timestamp/io_time_init 为 target-only 构建验证)
+io_test(test_sys_time test_sys_time.c ${SRC}/sys/time.c)
+target_compile_definitions(test_sys_time PRIVATE HOST_TEST)
 
 # lfs_port: littlefs 移植层, RAM 假件上挂载/读写/脏分区恢复。
 # littlefs 本体 (deps/littlefs) 可直接 host 编译; LFS_PORT_TEST_SMALL 把
