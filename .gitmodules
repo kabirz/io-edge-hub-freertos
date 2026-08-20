@@ -13,3 +13,6 @@
 [submodule "deps/STM32CubeF4"]
 	path = deps/STM32CubeF4
 	url = https://github.com/STMicroelectronics/STM32CubeF4
+[submodule "deps/lwip"]
+	path = deps/lwip
+	url = https://github.com/lwip-tcpip/lwip.git

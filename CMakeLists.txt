@@ -56,6 +56,7 @@ set(APP_SOURCES
     src/net/can.c
     src/net/udp_cfg.c
     src/net/udp_task.c
+    src/net/sys_arch.c
     src/io/dio.c
     src/io/adc.c
     deps/littlefs/lfs.c
@@ -64,12 +65,43 @@ set(APP_SOURCES
     deps/ioLibrary/Ethernet/W5500/w5500.c
     deps/ioLibrary/Ethernet/socket.c
 )
+# LwIP 2.1.3 core sources (FreeRTOS + NO_SYS=0 mode)
+set(LWIP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/deps/lwip)
+list(APPEND APP_SOURCES
+    ${LWIP_DIR}/src/core/init.c
+    ${LWIP_DIR}/src/core/def.c
+    ${LWIP_DIR}/src/core/dns.c
+    ${LWIP_DIR}/src/core/inet_chksum.c
+    ${LWIP_DIR}/src/core/ip.c
+    ${LWIP_DIR}/src/core/mem.c
+    ${LWIP_DIR}/src/core/memp.c
+    ${LWIP_DIR}/src/core/netif.c
+    ${LWIP_DIR}/src/core/pbuf.c
+    ${LWIP_DIR}/src/core/raw.c
+    ${LWIP_DIR}/src/core/stats.c
+    ${LWIP_DIR}/src/core/sys.c
+    ${LWIP_DIR}/src/core/tcp.c
+    ${LWIP_DIR}/src/core/tcp_in.c
+    ${LWIP_DIR}/src/core/tcp_out.c
+    ${LWIP_DIR}/src/core/timeouts.c
+    ${LWIP_DIR}/src/core/udp.c
+    ${LWIP_DIR}/src/core/ipv4/ip4.c
+    ${LWIP_DIR}/src/core/ipv4/ip4_addr.c
+    ${LWIP_DIR}/src/core/ipv4/ip4_frag.c
+    ${LWIP_DIR}/src/core/ipv4/icmp.c
+    ${LWIP_DIR}/src/core/ipv4/etharp.c
+    ${LWIP_DIR}/src/core/ipv4/autoip.c
+    ${LWIP_DIR}/src/netif/ethernet.c
+)
 set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/board
     ${CMAKE_CURRENT_SOURCE_DIR}/src/include
     ${CMAKE_CURRENT_SOURCE_DIR}/deps/littlefs
     ${CMAKE_BINARY_DIR}/generated
+    # LwIP include paths (user arch headers before LwIP's own arch/)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+    ${LWIP_DIR}/src/include
     # 仅 Ethernet 根上路径: "wizchip_conf.h"/"socket.h" 直名包含;
     # ioLibrary 的 w5500.h 只经 "W5500/w5500.h" 路径限定访问,
     # 未限定 "w5500.h" 一律解析到 src/include (本模块对外头)。
@@ -85,6 +117,12 @@ target_include_directories(fw.elf PRIVATE ${APP_INCLUDES})
 target_compile_options(fw.elf PRIVATE -Wall -Wextra)
 # ioLibrary 选型: W5500, SPI 模式 (wizchip_conf.h 默认 _WIZCHIP_=W6300)
 target_compile_definitions(fw.elf PRIVATE _WIZCHIP_=5500)
+# LwIP: enable lwipopts.h via -I (src/include is already in path),
+# define LWIP_LITE=1 for reduced feature set, ETHARP_SUPPORT_STATIC_ENTRIES=0
+target_compile_definitions(fw.elf PRIVATE
+    LWIP_LITE=1
+    ETHARP_SUPPORT_STATIC_ENTRIES=0
+)
 # Release: 仅固件目标关日志 (host 测试在 tests/CMakeLists.txt 自带
 # LOG_ENABLE=0, 不受此开关影响)
 if(APP_RELEASE)
@@ -96,6 +134,34 @@ set_source_files_properties(
     deps/ioLibrary/Ethernet/wizchip_conf.c
     deps/ioLibrary/Ethernet/W5500/w5500.c
     deps/ioLibrary/Ethernet/socket.c
+    PROPERTIES COMPILE_OPTIONS "-w"
+)
+# LwIP upstream: suppress warnings for vendored sources
+set_source_files_properties(
+    ${LWIP_DIR}/src/core/init.c
+    ${LWIP_DIR}/src/core/def.c
+    ${LWIP_DIR}/src/core/dns.c
+    ${LWIP_DIR}/src/core/inet_chksum.c
+    ${LWIP_DIR}/src/core/ip.c
+    ${LWIP_DIR}/src/core/mem.c
+    ${LWIP_DIR}/src/core/memp.c
+    ${LWIP_DIR}/src/core/netif.c
+    ${LWIP_DIR}/src/core/pbuf.c
+    ${LWIP_DIR}/src/core/raw.c
+    ${LWIP_DIR}/src/core/stats.c
+    ${LWIP_DIR}/src/core/sys.c
+    ${LWIP_DIR}/src/core/tcp.c
+    ${LWIP_DIR}/src/core/tcp_in.c
+    ${LWIP_DIR}/src/core/tcp_out.c
+    ${LWIP_DIR}/src/core/timeouts.c
+    ${LWIP_DIR}/src/core/udp.c
+    ${LWIP_DIR}/src/core/ipv4/ip4.c
+    ${LWIP_DIR}/src/core/ipv4/ip4_addr.c
+    ${LWIP_DIR}/src/core/ipv4/ip4_frag.c
+    ${LWIP_DIR}/src/core/ipv4/icmp.c
+    ${LWIP_DIR}/src/core/ipv4/etharp.c
+    ${LWIP_DIR}/src/core/ipv4/autoip.c
+    ${LWIP_DIR}/src/netif/ethernet.c
     PROPERTIES COMPILE_OPTIONS "-w"
 )
 # tcp.c / udp_task.c 包含 ioLibrary socket.h: 上游头声明了 W6x00 专用
