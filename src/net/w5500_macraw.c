@@ -71,7 +71,10 @@ static void low_level_init(struct netif *netif)
     close(MACRAW_SN);
     socket(MACRAW_SN, Sn_MR_MACRAW, 0, 0x00);
 
-    if (getSn_SR(MACRAW_SN) != SOCK_MACRAW) {
+    uint8_t sr = getSn_SR(MACRAW_SN);
+    uint8_t mr = getSn_MR(MACRAW_SN);
+    LOG_INF("MACRAW: SR=0x%02x MR=0x%02x (expect SR=0x42 MR=0x02)", sr, mr);
+    if (sr != SOCK_MACRAW) {
         LOG_ERR("MACRAW: socket open failed (SR=0x%02x)", getSn_SR(MACRAW_SN));
         return;
     }
@@ -118,44 +121,40 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
 
 static struct pbuf *low_level_input(void)
 {
-    uint16_t hdr, framelen;
-    uint8_t tmp[2];
-
     uint16_t rsr = getSn_RX_RSR(MACRAW_SN);
-    if (rsr == 0) {
+    if (rsr < 2u) {
         return NULL;
     }
 
-    wiz_recv_data(MACRAW_SN, tmp, 2);
-    hdr = (uint16_t)((tmp[0] << 8) | tmp[1]);
-    framelen = hdr - 2;
+    /* 一次性读取整个帧 (2-byte header + payload) 到临时缓冲区。
+     * MACRAW 帧最大 1514B (不含 header), 加 2B header = 1516B。
+     * 用栈上缓冲区一次性读取避免 wiz_recv_data 分次读导致指针错位。 */
+    uint8_t buf[1520];
+    uint16_t toread = (rsr > sizeof(buf)) ? (uint16_t)sizeof(buf) : rsr;
+    wiz_recv_data(MACRAW_SN, buf, toread);
+    setSn_CR(MACRAW_SN, Sn_CR_RECV);
 
-    if (framelen == 0 || framelen > 32000) {
-        LOG_WRN("MACRAW RX: bad len %u (hdr=0x%04x)", framelen, hdr);
-        setSn_CR(MACRAW_SN, Sn_CR_RECV);
+    /* 解析 2-byte big-endian length header */
+    uint16_t hdr = (uint16_t)((buf[0] << 8) | buf[1]);
+    uint16_t framelen = hdr - 2;
+
+    if (framelen == 0 || framelen > 32000 || (2 + framelen) > toread) {
+        LOG_WRN("MACRAW RX: bad hdr=0x%04x rsr=%u read=%u", hdr, rsr, toread);
         return NULL;
     }
 
     struct pbuf *p = pbuf_alloc(PBUF_RAW, framelen, PBUF_POOL);
     if (p == NULL) {
         LOG_WRN("MACRAW RX: pbuf alloc fail (%u)", framelen);
-        uint8_t discard[32];
-        uint16_t rem = framelen;
-        while (rem > 0) {
-            uint16_t chunk = (rem > sizeof(discard)) ?
-                             (uint16_t)sizeof(discard) : rem;
-            wiz_recv_data(MACRAW_SN, discard, chunk);
-            rem -= chunk;
-        }
-        setSn_CR(MACRAW_SN, Sn_CR_RECV);
         return NULL;
     }
 
     struct pbuf *q;
+    uint16_t offset = 2; /* skip header */
     for (q = p; q != NULL; q = q->next) {
-        wiz_recv_data(MACRAW_SN, (uint8_t *)q->payload, q->len);
+        memcpy(q->payload, &buf[offset], q->len);
+        offset += q->len;
     }
-    setSn_CR(MACRAW_SN, Sn_CR_RECV);
     return p;
 }
 
@@ -179,12 +178,22 @@ static void macraw_rx_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        (void)xSemaphoreTake(rx_sem, portMAX_DELAY);
+        /* 轮询模式: 每 10ms 检查 W5500 INT 引脚 (PD1, 低电平有效)
+         * 和 socket RX 缓冲区。比 EXTI 更可靠 (避免中断优先级问题)。 */
+        vTaskDelay(pdMS_TO_TICKS(10));
+
+        /* 检查是否有数据在 MACRAW socket 缓冲区 */
+        uint16_t rsr = getSn_RX_RSR(MACRAW_SN);
+        if (rsr == 0) {
+            continue;
+        }
+
         for (;;) {
             struct pbuf *p = low_level_input();
             if (p == NULL) {
                 break;
             }
+            LOG_INF("MACRAW RX: frame %u bytes", p->tot_len);
             if (w5500_netif.input(p, &w5500_netif) != ERR_OK) {
                 pbuf_free(p);
             }

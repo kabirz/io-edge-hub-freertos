@@ -245,17 +245,23 @@ int w5500_net_init(const uint8_t mac[6], const uint8_t ip[4],
 	reg_wizchip_spi_cbfunc(wiz_spi_readbyte, wiz_spi_writebyte);
 	reg_wizchip_spiburst_cbfunc(wiz_spi_readburst, wiz_spi_writeburst);
 
-	/* Buffer allocation:
-	 * Socket 0: 16KB RX + 16KB TX (reserved for MACRAW / LwIP netif)
-	 * Sockets 1-3: 2KB each (ioLibrary: Modbus TCP + UDP config)
-	 * Sockets 4-7: 0 (unused) */
+	/* 2KB x 8 socket 缓冲 (上电默认即此, 显式写一遍确定态) */
 	for (int i = 0; i < _WIZCHIP_SOCK_NUM_; i++) {
-		txsize[i] = (i == 0) ? 16 : 2;
-		rxsize[i] = (i == 0) ? 16 : 2;
+		txsize[i] = 2;
+		rxsize[i] = 2;
 	}
 	if (wizchip_init(txsize, rxsize) != 0) {
 		LOG_WRN("wizchip_init failed");
 		return -1;
+	}
+
+	/* Socket 0 重配为 16KB RX + 16KB TX (MACRAW 专用),
+	 * 其余 socket 保持 2KB。W5500 总缓冲 16KB x 2 (RX+TX),
+	 * socket 0 独占后 1-7 不能再分配。 */
+	{
+		uint8_t s0_tx = 16, s0_rx = 16;
+		setSn_TXBUF_SIZE(0, s0_tx);
+		setSn_RXBUF_SIZE(0, s0_rx);
 	}
 
 	/* SPI 通路自检: 读错 (全 0 / 全 FF) 说明总线或芯片不在位 */
