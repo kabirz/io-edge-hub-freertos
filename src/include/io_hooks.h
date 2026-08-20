@@ -5,8 +5,8 @@
  * regmap.c (寄存器模型) 向其余模块的全部调用点。
  * Zephyr 版这些符号散落在 init.h 声明 + 各模块直链; FreeRTOS 版统一收口:
  *   - host 测试: 测试文件内提供假件 (tests/test_regmap.c)
- *   - 固件: src/sys/app_stubs.c 提供 weak 空实现占位,
- *     真实实现 (dio/history/time/reboot/os, 后续任务) 同名强符号覆盖
+ *   - 固件: 全部为强符号实现 (dio/history/time/reboot/os 各模块文件;
+ *     app_stubs.c 的 weak 占位已随 Task 14 dio.c 落地而删除)
  */
 
 #ifndef IO_HOOKS_H
@@ -21,8 +21,9 @@ extern "C" {
 #endif
 
 /* ==================== DO 控制 (dio.c) ==================== */
-/* 设置 DO 输出 + LED 联动, val bit0-7 对应 DO1-DO8 */
-void mb_set_do(uint16_t val);
+/* 设置 DO 输出 + LED 联动, val bit0-7 对应 DO1-DO8 (对齐 Zephyr
+ * include/init.h 的 int 返回, 恒 0) */
+int mb_set_do(uint16_t val);
 
 /* ==================== 历史记录 (history.c) ==================== */
 /* 开关历史写入 (holding_reg[0x05] 写回调调用) */

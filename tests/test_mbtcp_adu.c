@@ -26,7 +26,7 @@ static int fake_ts_calls;
 static int fake_reboots;
 static uint32_t fake_time;
 
-void mb_set_do(uint16_t val)       { fake_do_val = val; fake_do_calls++; }
+int mb_set_do(uint16_t val)       { fake_do_val = val; fake_do_calls++; return 0; }
 void history_enable_write(bool en) { fake_hist_en = en; fake_hist_en_calls++; }
 void history_sync(void)            { fake_sync_calls++; }
 bool set_timestamp(time_t t)        { fake_ts_val = t; fake_ts_calls++; return true; }

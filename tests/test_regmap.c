@@ -27,7 +27,7 @@ static uint32_t fake_time;
 static int fake_seq; /* 全局调用序号, 校验副作用顺序 */
 static int seq_sync, seq_reboot;
 
-void mb_set_do(uint16_t val)       { fake_do_val = val; fake_do_calls++; }
+int mb_set_do(uint16_t val)       { fake_do_val = val; fake_do_calls++; return 0; }
 void history_enable_write(bool en) { fake_hist_en = en; fake_hist_en_calls++; }
 void history_sync(void)            { fake_sync_calls++; seq_sync = ++fake_seq; }
 bool set_timestamp(time_t t)        { fake_ts_val = t; fake_ts_calls++; return true; }

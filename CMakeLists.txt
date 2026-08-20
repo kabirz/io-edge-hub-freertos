@@ -51,7 +51,8 @@ set(APP_SOURCES
     src/net/w5500.c
     src/net/udp_cfg.c
     src/net/udp_task.c
-    src/sys/app_stubs.c
+    src/io/dio.c
+    src/io/adc.c
     deps/littlefs/lfs.c
     deps/littlefs/lfs_util.c
     deps/ioLibrary/Ethernet/wizchip_conf.c

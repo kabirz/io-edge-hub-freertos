@@ -186,8 +186,8 @@ static void net_mon_task(void *arg)
 			LOG_INF("net link up");
 		} else if (!up && prev_up) {
 			/* 下降沿: DO 全灭 + 影子寄存器清零, 仅边沿触发
-			 * 一次 (对齐 Zephyr NET_EVENT_IF_DOWN 行为;
-			 * mb_set_do 为 weak 占位, Task 14 覆盖) */
+				 * 一次 (对齐 Zephyr NET_EVENT_IF_DOWN 行为;
+				 * mb_set_do = dio.c 强实现, DO+LED 同清) */
 			update_holding_reg(HOLDING_DO_IDX, 0);
 			mb_set_do(0);
 			LOG_WRN("net link down");

@@ -78,6 +78,11 @@ io_test(test_lfs_port test_lfs_port.c fake_flash.c
 target_include_directories(test_lfs_port PRIVATE ${REPO_ROOT}/deps/littlefs)
 target_compile_definitions(test_lfs_port PRIVATE LFS_PORT_TEST_SMALL)
 
+# io/adc: ai_convert 整数换算语义 (两步整除 + 64 位中间量, 对齐 Zephyr
+# adc.c)。adc.c 的 HAL/任务部分经 HOST_TEST 分离, host 只编译纯函数段。
+io_test(test_adc_math test_adc_math.c ${SRC}/io/adc.c)
+target_compile_definitions(test_adc_math PRIVATE HOST_TEST)
+
 # history: 纯文件核心 (history_file.c) 直测 — DI/AI 字节布局、4096B 轮转、
 # 保留 10 份清理、close 续写、重启续写字典序最大文件。history.c (FreeRTOS
 # 队列/任务壳) 不参与 host 链接。HIST_FILE_MAX 缩到 4096 让轮转可触发。

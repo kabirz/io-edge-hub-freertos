@@ -32,7 +32,7 @@ static uint32_t fake_ms; /* 可控毫秒时钟 (绑到 udp_now_ms) */
 
 static uint32_t fake_now_ms(void) { return fake_ms; }
 
-void mb_set_do(uint16_t val)              { (void)val; }
+int mb_set_do(uint16_t val)              { (void)val; return 0; }
 void history_enable_write(bool en)        { (void)en; }
 void history_sync(void)                   { fake_sync_calls++; seq_sync = ++fake_seq; }
 void io_reboot_cold(void)                 { fake_reboots++; seq_reboot = ++fake_seq; }
