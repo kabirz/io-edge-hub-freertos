@@ -11,8 +11,9 @@
  *      缓冲区而是死代码 -- 移植为只在 proto!=0 时失败。
  *   2. proto_id != 0 -> 不进解码器, 直接回 server-failure ADU
  *      (modbus_raw_set_server_failure: fc|0x80 + data[0]=0x04 + len=1,
- *      proto 归 0, trans/unit 回显)。注意: 先于 unit 判定, 广播帧
- *      (unit=0) 的 proto 错误同样应答 (Zephyr 同序)。
+ *      proto 回显请求原始值 (Zephyr 同款, 错误的 proto 一并回显),
+ *      trans/unit 回显)。注意: 先于 unit 判定, 广播帧 (unit=0) 的
+ *      proto 错误同样应答 (Zephyr 同序)。
  *   3. unit != 0 -> 改写为 srv_unit 后提交 (Zephyr 用于绕过 server
  *      内部 unit 匹配; 本移植 mb_server 不校验 unit, 改写仅为对齐);
  *      应答 unit 恒回填请求原始 unit, 不暴露内部改写。
@@ -68,10 +69,11 @@ int mbtcp_adu_process(const uint8_t *in, uint16_t in_len,
 	unit_id = in[MBTCP_OFF_UNIT_ID];
 	fc = in[MBTCP_OFF_FC];
 
-	/* 2. proto_id != 0: server-failure 应答 (先于广播判定, Zephyr 同序) */
+	/* 2. proto_id != 0: server-failure 应答 (先于广播判定, Zephyr 同序);
+	 *    proto 回显请求原始值 (Zephyr modbus_raw_set_server_failure 同款) */
 	if (proto_id != 0) {
 		io_put_be16(trans_id, &out[MBTCP_OFF_TRANS_ID]);
-		io_put_be16(0, &out[MBTCP_OFF_PROTO_ID]);
+		io_put_be16(proto_id, &out[MBTCP_OFF_PROTO_ID]);
 		io_put_be16(3, &out[MBTCP_OFF_LENGTH]); /* unit+fc+exc */
 		out[MBTCP_OFF_UNIT_ID] = unit_id;      /* 原始 unit 回显 */
 		out[MBTCP_OFF_FC] = fc | 0x80;
@@ -81,9 +83,9 @@ int mbtcp_adu_process(const uint8_t *in, uint16_t in_len,
 	}
 
 	/* 1. length 钳制 MIN(mbap_len, 256) - 2 -> PDU data 长度;
-	 * fc 单独计入 -> PDU (fc+data) 总长。mbap_len < 2 时 Zephyr 的
-	 * 无符号减法会下溢成大数 (等价挂死), 此处钳到 0 更安全,
-	 * 解码器按 1 字节 PDU (仅 fc) 处理 -> 长度违例静默。 */
+	 * fc 单独计入 -> PDU (fc+data) 总长。mbap_len < 2 时 Zephyr 有
+	 * `if (adu->length >= 2)` 守卫不会下溢, 此处同款守卫 (按 1 字节
+	 * PDU 仅 fc 处理 -> 长度违例静默)。 */
 	if (mbap_len > MBTCP_MBAP_LEN_CLAMP) {
 		mbap_len = MBTCP_MBAP_LEN_CLAMP;
 	}

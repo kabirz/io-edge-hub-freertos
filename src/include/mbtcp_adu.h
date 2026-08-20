@@ -6,8 +6,8 @@
  * 移植, MBAP 头解析/校验、unit 改写、广播抑制、MBAP+PDU 合并应答)。
  *
  * 传输层 (tcp.c / RTU 任务) 收满一条完整 ADU 帧后调用本函数:
- *   - proto_id != 0 -> server-failure 应答 (fc|0x80 + 0x04, proto 归 0,
- *     trans/unit 回显), 不进 PDU 解码器
+ *   - proto_id != 0 -> server-failure 应答 (fc|0x80 + 0x04, proto 回显
+ *     请求原始值, trans/unit 回显), 不进 PDU 解码器
  *   - MBAP length: MIN(len, 256) - 2 -> PDU data 长度 (Zephyr 同款钳制;
  *     长度上限检查在钳制后为死代码, 故只在 proto!=0 时失败)
  *   - unit != 0 -> 内部改写为 srv_unit 后进解码器 (mb_server 不校验 unit,

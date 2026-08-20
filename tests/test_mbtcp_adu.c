@@ -41,7 +41,8 @@ static uint8_t in_buf[300];
 static uint8_t out_buf[300];
 static uint16_t out_len;
 
-/* 输入完整 ADU 帧; srv_unit 恒 0x09 (regmap HOLDING_SLAVE_ID_IDX 上电值) */
+/* 输入完整 ADU 帧; srv_unit 恒 0x09 (任意非零从站号即可 -- mb_server 不
+ * 校验 unit; regmap HOLDING_SLAVE_ID_IDX 上电默认值为 1, 非 0x09) */
 static int process(const uint8_t *adu, uint16_t len)
 {
     memcpy(in_buf, adu, len);
@@ -110,11 +111,12 @@ int main(void)
                   0x08, 0x00, 0x0F, 0x00, 0x01), 12); /* noresp: 广播1 */
 
     /* ---- 4. proto_id=0x0001: server-failure 应答 (fc|0x80, code 0x04) ----
-     * trans 回显、proto 归 0、unit 回显原始值 0x07、MBAP len=3;
+     * trans 回显、proto 回显请求原始值 0x0001 (Zephyr 同款, 不归 0)、
+     * unit 回显原始值 0x07、MBAP len=3;
      * 不进 decoder (下方 bus 计数验证) */
     check_rsp(ADU(0xDE, 0xAD, 0x00, 0x01, 0x00, 0x06, 0x07,
                   0x03, 0x00, 0x00, 0x00, 0x02), 13,
-              ADU(0xDE, 0xAD, 0x00, 0x00, 0x00, 0x03, 0x07,
+              ADU(0xDE, 0xAD, 0x00, 0x01, 0x00, 0x03, 0x07,
                   0x83, 0x04), 9);
     /* 清零后重发 proto!=0 + 读 bus: 仅 FC08 自身 1 条 (decoder 未被碰) */
     check_rsp(ADU(0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x01,
