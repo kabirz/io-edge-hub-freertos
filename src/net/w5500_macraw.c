@@ -49,6 +49,12 @@ static StaticSemaphore_t rx_sem_cb;
 static StackType_t rx_stack[MACRAW_RX_STACK];
 static StaticTask_t rx_tcb;
 
+/* Debug counters */
+volatile uint32_t macraw_rx_total;
+volatile uint32_t macraw_rx_ipv4;
+volatile uint32_t macraw_rx_arp;
+volatile uint32_t macraw_rx_other;
+
 /* ==================== Low-level: init / output / input ==================== */
 
 static err_t macraw_netif_init(struct netif *netif)
@@ -194,6 +200,14 @@ static void macraw_rx_task(void *arg)
                 break;
             }
             LOG_INF("MACRAW RX: frame %u bytes", p->tot_len);
+            macraw_rx_total++;
+            if (p->tot_len >= 14) {
+                uint16_t ethertype = ((uint8_t *)p->payload)[12] << 8 |
+                                     ((uint8_t *)p->payload)[13];
+                if (ethertype == 0x0800) macraw_rx_ipv4++;
+                else if (ethertype == 0x0806) macraw_rx_arp++;
+                else macraw_rx_other++;
+            }
             if (w5500_netif.input(p, &w5500_netif) != ERR_OK) {
                 pbuf_free(p);
             }

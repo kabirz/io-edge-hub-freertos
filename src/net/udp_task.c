@@ -14,6 +14,7 @@
 #include "lwip/udp.h"
 #include "lwip/ip_addr.h"
 #include "lwip/pbuf.h"
+#include "lwip/tcpip.h"
 
 #include "w5500.h"
 #include "udp_cfg.h"
@@ -105,9 +106,11 @@ static void udp_cfg_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     }
 }
 
-void udp_cfg_start(void)
+/* tcpip 回调: 在 tcpip 线程上下文中绑定 UDP PCB,
+ * 确保 PCB 注册与帧处理在同一线程。 */
+static void udp_cfg_init_cb(void *arg)
 {
-    udp_now_ms = udp_now_ms_target;
+    (void)arg;
 
     cfg_pcb = udp_new();
     if (cfg_pcb == NULL) {
@@ -124,4 +127,13 @@ void udp_cfg_start(void)
 
     udp_recv(cfg_pcb, udp_cfg_recv, NULL);
     LOG_INF("udpcfg: port %u listening (LwIP)", UDP_CFG_PORT);
+}
+
+void udp_cfg_start(void)
+{
+    udp_now_ms = udp_now_ms_target;
+
+    /* 必须在 tcpip 线程上下文中完成 PCB 绑定,
+     * 否则帧处理与 PCB 注册可能竞争。 */
+    tcpip_callback(udp_cfg_init_cb, NULL);
 }
