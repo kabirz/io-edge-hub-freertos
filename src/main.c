@@ -43,6 +43,11 @@
 
 #include "lwip/tcpip.h"   /* tcpip_init */
 
+/* CCM zeroing: LwIP memp pools are placed in CCM via LWIP_DECLARE_MEMORY_ALIGNED
+ * section attribute. CCM has no startup initialization, so we zero it here.
+ * Defined in the linker script: _sccmram / _eccmram */
+extern uint32_t _sccmram, _eccmram;
+
 /* Modbus 传输层启动入口 (src/modbus/tcp.c / rtu.c; target-only,
  * 仅 main 接线使用, 不单设头文件) */
 extern void mb_tcp_start(void);
@@ -249,6 +254,11 @@ static void boot_task(void *arg)
     net_setup();
 
     /* LwIP + MACRAW netif */
+    /* Zero CCM region (LwIP memp pools reside here via section attribute).
+     * CCM has no startup init; without this, pools contain garbage.
+     * _sccmram/_eccmram are byte addresses from the linker script. */
+    memset(&_sccmram, 0, (size_t)((uintptr_t)&_eccmram - (uintptr_t)&_sccmram));
+
     tcpip_init(NULL, NULL);
     {
         uint8_t mac[6];

@@ -30,4 +30,13 @@ typedef uint32_t  u32_t;
 typedef int32_t   s32_t;
 typedef uintptr_t mem_ptr_t;
 
+/*
+ * Relocate all LwIP memp pool memory to CCM (0x10000000, 64KB).
+ * SPI is CPU-driven (no DMA), so CCM's "no DMA" restriction is irrelevant.
+ * This saves ~23KB of SRAM (pbuf pool 15KB + memp pools ~8KB).
+ */
+#define LWIP_DECLARE_MEMORY_ALIGNED(variable_name, size) \
+    u8_t variable_name[LWIP_MEM_ALIGN_BUFFER(size)] \
+    __attribute__((section(".ccmram")))
+
 #endif /* LWIP_ARCH_CC_H */
