@@ -32,8 +32,10 @@ int main(void)
 	TEST_ASSERT(!ts_in_range(946684799));
 	TEST_ASSERT(ts_in_range(946684800));
 
-	/* 上边界: 闭区间, 2100-01-01 00:00:00 本身合法, +1s 拒绝 */
-	TEST_ASSERT(ts_in_range(4102444800));
+	/* 上边界: 半开区间 (对齐 Zephyr), 2100-01-01 00:00:00 本身拒绝,
+	 * 前一秒合法 */
+	TEST_ASSERT(ts_in_range(4102444799));
+	TEST_ASSERT(!ts_in_range(4102444800));
 	TEST_ASSERT(!ts_in_range(4102444801));
 
 	/* 任务书 set_timestamp 用例的纯函数等价判定 */

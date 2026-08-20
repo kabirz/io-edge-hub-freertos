@@ -6,7 +6,8 @@
  * FreeRTOS 移植:
  *   - 启动时从 RTC 读取时间装入 epoch 缓存 (Zephyr 版为 clock_settime)
  *   - set_timestamp(): Modbus 0x0E/0x0F 或 UDP SET_TIME 写 RTC (BIN) +
- *     缓存; Zephyr 版为 void, 本版返回 bool (UDP 路径需判 ok)
+ *     缓存; Zephyr 版为 void, 本版返回 bool (UDP 路径需判 ok); 前置
+ *     rtc_ready 守卫 (对齐 Zephyr !rtc_dev, RTC 初始化失败时拒绝写)
  *   - 运行期缓存由 1Hz FreeRTOS 软件定时器递增 (对齐 Zephyr 系统时钟
  *     自走; RTC 本体只在设时间时写, 读路径无锁 -- u32 读原子)
  *
@@ -18,9 +19,9 @@
 
 #include "io_time.h"
 
-/* 合法时间戳范围: [2000-01-01 00:00:00, 2100-01-01 00:00:00] 闭区间
- * (Zephyr 版为半开 t < TS_MAX, 任务书边界锁定上端点含入 -- 差异仅
- * 2100-01-01 00:00:00 整这一秒)。超出范围的值通常是主站写入错误
+/* 合法时间戳范围: [2000-01-01 00:00:00, 2100-01-01 00:00:00) 半开区间
+ * (对齐 Zephyr 版: t >= TS_MAX 拒绝, 即 2100-01-01 00:00:00 本身
+ * 非法)。超出范围的值通常是主站写入错误
  * (如只写低 16 位、高字为 0 -> 1970 年), gmtime 对部分非法输入会
  * 返回 NULL, 解引用将触发 HardFault。这里直接拒绝越界值。 */
 #define TS_MIN 946684800U  /* 2000-01-01 00:00:00 UTC */
@@ -28,7 +29,7 @@
 
 bool ts_in_range(time_t t)
 {
-	return t >= (time_t)TS_MIN && t <= (time_t)TS_MAX;
+	return t >= (time_t)TS_MIN && t < (time_t)TS_MAX;
 }
 
 #ifndef HOST_TEST
@@ -48,6 +49,13 @@ bool ts_in_range(time_t t)
 #define RTC_BKP_MAGIC 0x54494D45u /* "TIME" */
 
 static RTC_HandleTypeDef hrtc;
+
+/* RTC 就绪标志: 仅当 io_time_init 的 RTC 上电流程走到底 (LSE 起振 +
+ * HAL_RTC_Init 成功, 即 hrtc.Instance 已有效) 才置位。LSE/RTC 初始化
+ * 失败时 hrtc.Instance 保持 NULL, set_timestamp 若继续调
+ * HAL_RTC_SetTime 将解引用 NULL -> HardFault -> 看门狗复位循环, 故
+ * 前置检查本标志 (对齐 Zephyr 版 set_timestamp 的 !rtc_dev 守卫)。 */
+static bool rtc_ready;
 
 /* epoch 缓存 (u32): 定时器服务任务写, 多任务读 */
 static volatile uint32_t epoch_cache;
@@ -72,6 +80,11 @@ bool set_timestamp(time_t t)
 	RTC_TimeTypeDef rtc_t = {0};
 	RTC_DateTypeDef rtc_d = {0};
 
+	if (!rtc_ready) {
+		LOG_WRN("rtc not ready, timestamp %lld ignored",
+			(long long)t);
+		return false;
+	}
 	if (!ts_in_range(t)) {
 		LOG_WRN("invalid timestamp %lld, ignored", (long long)t);
 		return false;
@@ -133,10 +146,17 @@ static bool rtc_read_epoch(uint32_t *out)
 	return true;
 }
 
-void io_time_init(void)
+/* RTC 上电流程 (io_time_init 的 RTC 部分): 备份域放开 -> (必要时)
+ * 备份域复位 -> LSE 起振 -> RTC 外设初始化 -> 备份域无标志时写默认
+ * 时间 -> 读出 epoch 写 *out (无效日期 -> 0)。任一步失败 LOG_ERR 并
+ * 返回 false (hrtc.Instance 保持 NULL, rtc_ready 不置位)。
+ * LSE 失败 (无晶振/损坏) 不算致命: 放弃 RTC, epoch 留 0 (对齐 Zephyr
+ * RTC 不可用时时间停在 0 的语义), 不阻断启动。 */
+static bool rtc_bringup(uint32_t *out)
 {
 	RCC_OscInitTypeDef osc = {0};
-	uint32_t epoch = 0;
+	RTC_TimeTypeDef rtc_t = {0};
+	RTC_DateTypeDef rtc_d = {0};
 
 	/* RTC/备份寄存器在备份域: PWR 时钟 + DBP 位放开写访问 */
 	__HAL_RCC_PWR_CLK_ENABLE();
@@ -151,14 +171,13 @@ void io_time_init(void)
 	}
 
 	/* LSE 起振 (外部 32.768kHz 晶振; 起振可慢至秒级, HAL 超时
-	 * LSE_STARTUP_TIMEOUT=5s)。失败 (无晶振/损坏): 放弃 RTC, epoch
-	 * 留 0 (对齐 Zephyr RTC 不可用时时间停在 0 的语义), 不阻断启动 */
+	 * LSE_STARTUP_TIMEOUT=5s) */
 	osc.OscillatorType = RCC_OSCILLATORTYPE_LSE;
 	osc.LSEState = RCC_LSE_ON;
 	osc.PLL.PLLState = RCC_PLL_NONE; /* 其余振荡器/PLL 保持 board_init 现状 */
 	if (HAL_RCC_OscConfig(&osc) != HAL_OK) {
 		LOG_ERR("LSE startup failed, RTC unavailable");
-		return;
+		return false;
 	}
 	__HAL_RCC_RTC_CONFIG(RCC_RTCCLKSOURCE_LSE);
 	__HAL_RCC_RTC_ENABLE();
@@ -171,15 +190,12 @@ void io_time_init(void)
 	hrtc.Init.SynchPrediv = 255;
 	if (HAL_RTC_Init(&hrtc) != HAL_OK) {
 		LOG_ERR("RTC init failed");
-		return;
+		return false;
 	}
 
 	/* 备份域无标志 (首次上电): 写默认 2020-01-01 00:00:00 (周三),
 	 * 读路径 (下方) 随即把它装入缓存; 之后 RTC 由 VBAT 维持 */
 	if (HAL_RTCEx_BKUPRead(&hrtc, RTC_BKP_DR0) != RTC_BKP_MAGIC) {
-		RTC_TimeTypeDef rtc_t = {0};
-		RTC_DateTypeDef rtc_d = {0};
-
 		rtc_d.WeekDay = RTC_WEEKDAY_WEDNESDAY;
 		rtc_d.Month = RTC_MONTH_JANUARY;
 		rtc_d.Date = 1;
@@ -190,14 +206,29 @@ void io_time_init(void)
 		}
 	}
 
-	/* RTC -> 缓存 (无效日期 -> epoch 0) */
-	if (!rtc_read_epoch(&epoch)) {
-		epoch = 0;
+	/* RTC -> epoch。RTC 硬件已可用 (rtc_ready 可置位), 读回无效
+	 * (mktime 越界/范围门外) 只回退 0 */
+	if (!rtc_read_epoch(out)) {
+		*out = 0;
+	}
+	return true;
+}
+
+void io_time_init(void)
+{
+	uint32_t epoch = 0;
+
+	if (rtc_bringup(&epoch)) {
+		rtc_ready = true;
+		LOG_INF("RTC epoch restored: %u", (unsigned)epoch);
 	}
 	epoch_cache = epoch;
 
-	/* 1Hz 软件定时器递增缓存: 本函数在 main 建任务前调用, xTimerStart
-	 * 入队 (tmrNO_DELAY) 由调度器启动后的定时器服务任务执行 */
+	/* 1Hz 软件定时器递增缓存: RTC 失败时同样启动 -- epoch 从 0 自走
+	 * (对齐 Zephyr RTC 不可用时系统时钟仍自走, 仅 set_timestamp 被
+	 * rtc_ready 守卫拒绝), io_now_epoch 持续可用。本函数在 main 建
+	 * 任务前调用, xTimerStart 入队 (tmrNO_DELAY) 由调度器启动后的
+	 * 定时器服务任务执行 */
 	time_tick_timer = xTimerCreateStatic("time1s", pdMS_TO_TICKS(1000),
 					     pdTRUE, NULL, time_tick_cb,
 					     &time_tick_tcb);
@@ -205,7 +236,5 @@ void io_time_init(void)
 		Error_Handler();
 	}
 	(void)xTimerStart(time_tick_timer, 0);
-
-	LOG_INF("RTC epoch restored: %u", (unsigned)epoch);
 }
 #endif /* !HOST_TEST */
