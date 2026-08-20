@@ -168,13 +168,6 @@ set_source_files_properties(
     ${LWIP_DIR}/src/netif/ethernet.c
     PROPERTIES COMPILE_OPTIONS "-w"
 )
-# tcp.c 包含 ioLibrary socket.h: 上游头声明了 W6x00 专用
-# static 函数却不定义 -> -Wunused-function (GCC 在 TU 末尾发出, pragma
-# 包不住)。仅对这些文件关该警告, 其余 -Wall -Wextra 照常。
-set_source_files_properties(
-    src/modbus/tcp.c
-    PROPERTIES COMPILE_OPTIONS "-Wno-unused-function"
-)
 # littlefs 仅在 Release (-DNDEBUG) 警告: lfs_mlist_isopen 等静态助手仅被
 # LFS_ASSERT(=assert) 引用, NDEBUG 下 assert 展开为空 -> "defined but not
 # used"。上游源码, 同前述策略仅对该文件关此警告。
