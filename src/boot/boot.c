@@ -15,6 +15,7 @@
 #include "main.h"
 
 #include "board.h"
+#include "boot_can.h"
 #include "flash_layout.h"
 #include "fw_version.h"
 #include "io_watchdog.h"
@@ -90,6 +91,10 @@ int main(void)
         boot_log("boot: NOR ok");
     }
 
+    /* CAN 紧急救援: 500ms 探测窗口, 上位机应答则进入 slot0 直写会话
+     * (CONFIRM 后本会话 boot_go 直接验签启动, 无 swap 标记) */
+    boot_can_wait(false);
+
     /* MCUboot: 验签 slot0 + 检查 slot1 升级请求 (SWAP_SCRATCH) */
     if (boot_go(&rsp) == 0) {
         uint32_t vec = rsp.br_image_off + rsp.br_hdr->ih_hdr_size;
@@ -102,10 +107,16 @@ int main(void)
 
     boot_log("boot: no valid image");
 
-    /* 无有效镜像: 常驻等待 (T6 起 = CAN 紧急升级救援循环) */
+    /* 无有效镜像: CAN 救援循环 (持续探测, 会话 CONFIRM 后复位重启) */
     for (;;) {
         watchdog_feed();
-        HAL_Delay(200);
+        boot_can_wait(true);
+        if (boot_rescue_done()) {
+            boot_log("boot: rescue image installed, rebooting");
+            HAL_Delay(200);
+            NVIC_SystemReset();
+        }
+        boot_log("boot: still no valid image");
     }
 }
 

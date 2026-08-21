@@ -313,6 +313,7 @@ set(MBEDTLS_DIR ${MCUBOOT_DIR}/ext/mbedtls)
 set(BOOT_SOURCES
     src/boot/boot.c
     src/boot/boot_uart.c
+    src/boot/boot_can.c
     src/board/board.c
     src/board/spi.c
     src/board/stm32f4xx_hal_timebase_tim.c

@@ -162,9 +162,31 @@ def keyhash_from_image(path):
     raise SystemExit('no KEYHASH TLV found')
 
 
+CAN_ID_BOOT_PROBE = 0x106
+CAN_ID_BOOT_ACK = 0x107
+BOOT_PROBE_MAGIC = 0x42544F31  # "BTO1"
+
+
+def wait_boot_probe(dev, timeout=5.0):
+    """等 MCUboot 0x106 探测帧 (应用 REBOOT 后), 校验后回 0x107."""
+    t_end = time.monotonic() + timeout
+    while time.monotonic() < t_end:
+        try:
+            d = dev.recv(CAN_ID_BOOT_PROBE, timeout=max(0.1, t_end - time.monotonic()))
+        except SystemExit:
+            continue
+        if len(d) >= 8 and struct.unpack_from('<I', d, 0)[0] == BOOT_PROBE_MAGIC:
+            print('bootloader probe: v%d.%d.%d' % (d[4], d[5], d[6]))
+            dev.send(CAN_ID_BOOT_ACK, b'\x5a')
+            return
+        print('probe frame with bad magic:', d.hex())
+    raise SystemExit('no boot probe 0x106 within %.1fs' % timeout)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('cmd', choices=['version', 'upgrade', 'reboot'])
+    ap.add_argument('cmd', choices=['version', 'upgrade', 'reboot',
+                                    'bootupgrade', 'rescue'])
     ap.add_argument('-f', '--file')
     ap.add_argument('--channel', default='PCAN_USBBUS1')
     ap.add_argument('--bitrate', type=int, default=250000)
@@ -180,6 +202,32 @@ def main():
         if args.cmd == 'reboot':
             dev.fw_cmd(FW_CMD_REBOOT)
             print('reboot sent')
+            return
+        if args.cmd == 'rescue':
+            # 砖机救援: 无有效镜像时 boot 持续发 0x106, 直接应答进入会话
+            wait_boot_probe(dev, timeout=15.0)
+            args.cmd = 'bootupgrade2'
+            # fallthrough 共用升级流程 (不再发 REBOOT / 不再等探测)
+
+        if args.cmd in ('bootupgrade', 'bootupgrade2'):
+            img = open(args.file, 'rb').read()
+            kh = keyhash_from_image(args.file)
+            print('image %d bytes, keyhash %s' % (len(img), kh.hex()))
+            if args.cmd == 'bootupgrade':
+                dev.fw_cmd(FW_CMD_REBOOT)  # 让运行中的应用进 bootloader
+                wait_boot_probe(dev)
+            print('bootloader session open')
+            dev.send_keyhash(kh)
+            dev.start(len(img))
+            print('slot0 erased, transferring...')
+            t0 = time.monotonic()
+            dev.send_data(img)
+            dt = max(time.monotonic() - t0, 1e-3)
+            print('%d bytes (%.0f B/s)' % (len(img), len(img) / dt))
+            dev.confirm(permanent=not args.test)
+            print('confirmed; boot validates and starts new image')
+            time.sleep(8)
+            print('version:', dev.get_version())
             return
 
         img = open(args.file, 'rb').read()
