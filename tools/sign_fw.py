@@ -7,14 +7,14 @@ Outputs: build/fw.bin            (raw app image, vectors at offset 0)
          build/full.hex          (boot + signed app, full-chip flash)
 """
 import os
+import shutil
 import subprocess
 import sys
 import sysconfig
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BUILD = os.path.join(ROOT, 'build')
-SDK_BIN = r'C:\Users\jxwaz\zephyr-sdk-0.17.0\arm-zephyr-eabi\bin'
-OBJCOPY = os.path.join(SDK_BIN, 'arm-zephyr-eabi-objcopy.exe')
+# 构建目录可覆盖 (Linux 用 build-linux, 避免与 Windows 的 CMake 缓存冲突)
+BUILD = os.environ.get('BUILD_DIR') or os.path.join(ROOT, 'build')
 KEY = os.path.join(ROOT, 'tools', 'keys', 'root-rsa2048.pem')
 
 SLOT0 = 0x08010000
@@ -23,11 +23,61 @@ SLOT_SIZE = 0x70000
 MAX_SECTORS = 120
 
 
+def find_objcopy():
+    """跨平台定位交叉 objcopy: 环境变量 -> PATH -> CMake 缓存编译器同
+    目录 -> 已知 SDK 路径 (Windows 开发机)。"""
+    env = os.environ.get('CROSS_OBJCOPY')
+    if env and os.path.exists(env):
+        return env
+    for name in ('arm-zephyr-eabi-objcopy', 'arm-none-eabi-objcopy'):
+        p = shutil.which(name)
+        if p:
+            return p
+    try:
+        for line in open(os.path.join(BUILD, 'CMakeCache.txt'),
+                         encoding='utf-8', errors='replace'):
+            if line.startswith('CMAKE_C_COMPILER:FILEPATH='):
+                cc = line.split('=', 1)[1].strip()
+                d = os.path.dirname(cc)
+                base = os.path.basename(cc)
+                if base.endswith('-gcc'):
+                    cand = os.path.join(d, base[:-4] + '-objcopy')
+                    if os.path.exists(cand):
+                        return cand
+                for name in ('arm-zephyr-eabi-objcopy',
+                             'arm-none-eabi-objcopy'):
+                    cand = os.path.join(d, name + ('.exe'
+                                       if os.name == 'nt' else ''))
+                    if os.path.exists(cand):
+                        return cand
+                break
+    except OSError:
+        pass
+    sdk = os.path.expanduser(
+        r'~/zephyr-sdk-0.17.0/arm-zephyr-eabi/bin/arm-zephyr-eabi-objcopy')
+    if os.path.exists(sdk):
+        return sdk
+    win = (r'C:\Users\jxwaz\zephyr-sdk-0.17.0\arm-zephyr-eabi\bin'
+           r'\arm-zephyr-eabi-objcopy.exe')
+    if os.path.exists(win):
+        return win
+    sys.exit('cross objcopy not found (set CROSS_OBJCOPY)')
+
+
+OBJCOPY = find_objcopy()
+
+
 def imgtool():
-    exe = os.path.join(sysconfig.get_path('scripts'), 'imgtool.exe')
-    if not os.path.exists(exe):
-        exe = os.path.join(sysconfig.get_path('scripts'), 'imgtool')
-    return [exe]
+    """imgtool 可执行 (Windows: scripts/imgtool.exe; Linux: PATH 或
+    python -m imgtool)。"""
+    p = shutil.which('imgtool')
+    if p:
+        return [p]
+    for name in ('imgtool.exe', 'imgtool', 'imgtool.py'):
+        cand = os.path.join(sysconfig.get_path('scripts'), name)
+        if os.path.exists(cand):
+            return [cand]
+    return [sys.executable, '-m', 'imgtool']
 
 
 def run(cmd):

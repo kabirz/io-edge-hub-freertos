@@ -342,6 +342,7 @@ set(BOOT_SOURCES
     ${MBEDTLS_DIR}/library/memory_buffer_alloc.c
     ${STM32_STARTUP_S}
     ${STM32_SYSTEM_C}
+    ${FW_KEYHASH_H} # boot_can.c include; 声明生成顺序依赖
     stm32f4xx_hal_conf.h
 )
 add_executable(boot.elf ${BOOT_SOURCES})

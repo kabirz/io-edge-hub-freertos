@@ -65,12 +65,16 @@ docs/                   ACCEPTANCE.md (上机验收) / KNOWN_DEVIATIONS.md (已�
 # STM32CubeF4 / lwip / mcuboot, 全部构建必需, 不递归)
 git submodule update --init
 
-# 只补 3 个必需的嵌套子模块
-git submodule update --init \
-  deps/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver \
-  deps/STM32CubeF4/Drivers/CMSIS/Device/ST/STM32F4xx \
-  deps/mcuboot/ext/mbedtls
+# 只补 3 个必需的嵌套子模块 (须从其父仓库内寻址)
+git -C deps/STM32CubeF4 submodule update --init \
+  Drivers/STM32F4xx_HAL_Driver Drivers/CMSIS/Device/ST/STM32F4xx
+git -C deps/mcuboot submodule update --init ext/mbedtls
 ```
+
+或直接用一键脚本: **`build.bat`** (Windows) / **`build.sh`** (Linux),
+完成 拉取 -> 配置 -> 编译 -> 签名 (无私钥时跳过并提示)。build.sh 自动
+探测工具链 (Zephyr SDK 优先, 编译探针校验布局兼容性), 产物在
+`build-linux/` (与 Windows 的 `build/` 隔离, 避免 CMake 缓存冲突)。
 
 不带这两个 HAL/CMSIS 嵌套子模块时, 配置阶段即报头文件缺失。
 带宽紧张可加 `--depth 1` (GitHub 支持按固定 SHA 浅取), 失败则去掉重试。
