@@ -41,11 +41,14 @@ void mcuboot_assert_fail(int line)
 #define FW_Q_DEPTH 8u
 #define FW_DATA_MAX 511u /* legacy 停等块 (对齐 Zephyr UDP_CHUNK_SIZE) */
 #define FW_V2_CHUNK 1400u
+/* DATA_V2 帧: [offset 4B][data <=1400] (不含 cmd 字节) */
+#define FW_V2_MAX (4u + FW_V2_CHUNK)
 
 enum fw_cmd {
 	FW_CMD_START = 0x01,
 	FW_CMD_DATA = 0x02,
 	FW_CMD_END = 0x03,
+	FW_CMD_DATA_V2 = 0x06,
 };
 
 struct fw_msg {
@@ -53,7 +56,7 @@ struct fw_msg {
 	uint16_t dlen;
 	ip_addr_t addr;
 	uint16_t port;
-	uint8_t data[FW_DATA_MAX + 4];
+	uint8_t data[FW_V2_MAX];
 };
 
 struct fw_reply {
@@ -67,7 +70,9 @@ static QueueHandle_t fw_q;
 static StaticQueue_t fw_q_cb;
 static uint8_t fw_q_buf[FW_Q_DEPTH * sizeof(struct fw_msg)];
 
-static StackType_t fw_stack[512];
+/* 栈: fw_msg 局部变量 ~1.4KB (DATA_V2 帧) + fw_upg/擦除/日志调用链,
+ * 512 字会溢出 (实测 START 处理后即刻复位), 取 1024 字 */
+static StackType_t fw_stack[1024];
 static StaticTask_t fw_tcb;
 
 /* 应答上下文池: worker 填 -> tcpip_callback 消费 */
@@ -162,6 +167,22 @@ static void fw_task(void *arg)
 			break;
 		}
 
+		case FW_CMD_DATA_V2: {
+			/* m.data: [offset LE32][data <=1400]; 仅 offset 与已收
+			 * 字节数一致才写入 (乱序/重复丢弃), 恒回当前期望 offset
+			 * (上位机 go-back-N 重传) */
+			uint8_t rep[5];
+
+			if (m.dlen >= 5u &&
+			    get_le32(m.data) == fw_upg_received()) {
+				(void)fw_upg_write(&m.data[4], m.dlen - 4u);
+			}
+			rep[0] = FW_CMD_DATA_V2;
+			put_le32(&rep[1], fw_upg_received());
+			fw_reply(&m, rep, 5);
+			break;
+		}
+
 		case FW_CMD_END: {
 			/* m.data: [test u8][crc LE16] */
 			uint8_t rep[2] = {FW_CMD_END, 0};
@@ -225,6 +246,14 @@ bool fw_udp_cmd(const uint8_t *rx, uint16_t len, const ip_addr_t *src,
 		m.dlen = len - 1u;
 		memcpy(m.data, &rx[1], m.dlen);
 		break;
+	case FW_CMD_DATA_V2:
+		/* [cmd][offset 4B][data <=1400] */
+		if (len < 6u || len - 1u > FW_V2_MAX) {
+			return false;
+		}
+		m.dlen = len - 1u;
+		memcpy(m.data, &rx[1], m.dlen);
+		break;
 	case FW_CMD_END:
 		if (len < 4u) {
 			return false;
@@ -246,5 +275,5 @@ void fw_udp_start(void)
 {
 	fw_q = xQueueCreateStatic(FW_Q_DEPTH, sizeof(struct fw_msg),
 				  fw_q_buf, &fw_q_cb);
-	xTaskCreateStatic(fw_task, "fw", 512, NULL, 3, fw_stack, &fw_tcb);
+	xTaskCreateStatic(fw_task, "fw", 1024, NULL, 3, fw_stack, &fw_tcb);
 }

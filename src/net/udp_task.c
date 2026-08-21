@@ -77,13 +77,14 @@ static void udp_cfg_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         return;
     }
 
-    /* 提取完整 payload (fw DATA 块最大 512B: cmd + 511B data) */
-    uint8_t rx[512];
+    /* 提取完整 payload (fw DATA_V2 帧: cmd + offset 4B + data <=1400B)。
+     * recv 回调仅 tcpip 线程单线程执行, 静态缓冲避免占栈 */
+    static uint8_t rx[1408];
     uint16_t copy_len = (p->tot_len < sizeof(rx)) ? p->tot_len : (uint16_t)sizeof(rx);
     pbuf_copy_partial(p, rx, copy_len, 0);
     pbuf_free(p);
 
-    /* 固件升级命令 0x01-0x03: 异步 worker 处理 + 异步应答 */
+    /* 固件升级命令 0x01-0x03/0x06: 异步 worker 处理 + 异步应答 */
     if (fw_udp_cmd(rx, copy_len, src_addr, src_port)) {
         return;
     }
