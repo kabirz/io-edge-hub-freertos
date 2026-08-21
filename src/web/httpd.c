@@ -2,23 +2,10 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Web 服务: HTTP/1.1 (端口 80) + REST API (Zephyr 版 src/web/httpd.c 的
- * LwIP raw TCP 移植; 全部回调在 tcpip 线程串行执行)
- *
- *   - 页面: / (gzip SPA, 构建期由 index.html 生成 web_index_gz.h)
- *   - 查询: /api/info  设备详情   /api/io  实时 IO   /api/regs  寄存器
- *           /api/history  历史文件列表
- *   - 下载: /api/history/download?name=data_*.raw (512B 分块, ACK 驱动;
- *           每块独立持 hist_lock, 不阻塞采样落盘)
- *   - 控制: /api/do /api/reg /api/time /api/save /api/reboot /api/cfg
- *           /api/history/delete (写路径与 Modbus 回调共用 io_write_*,
- *           副作用与 FC05/FC06 完全一致)
- *   - WS (/ws) 暂未实现: 页面自动回退 2s 轮询, cfg 走 POST /api/cfg
- *
- * 响应流式: 头/体按 tcp_sndbuf 逐片 tcp_write, ERR_MEM 时等 tcp_sent
- * (ACK) 继续; 写队列在途上限 4*MSS, 内存占用与文件大小无关。
- * keep-alive: JSON/静态响应后连接复用 (下载响应 Connection: close);
- * 客户端流水线请求暂缓 (响应完成后处理 rx 残留)。
+ * HTTP/1.1 服务器 (端口 80): gzip SPA + REST API, Zephyr 版 web 的移植。
+ * 回调全在 tcpip 线程; 响应按 tcp_sndbuf 分片 ACK 驱动发送 (在途
+ * <= 4*MSS); 下载分块独立持 hist_lock, 不阻塞采样落盘。
+ * WS (/ws) 暂缺: 页面自动回退轮询, cfg 走 POST /api/cfg。
  */
 
 #include <stdio.h>
@@ -43,12 +30,12 @@
 
 #define HTTP_PORT        80u
 #define HTTP_MAX_CONN    2u
-#define HTTP_RX_BUF      640u  /* 请求头 + POST body 单缓冲 */
-#define HTTP_HDR_MAX     256u  /* 响应头缓冲 (下载头含 Content-Disposition ~170B) */
-#define HTTP_BODY_BUF    704u  /* per-conn JSON body (info ~640) */
-#define HTTP_DL_CHUNK    512u  /* 历史文件分块 */
-#define HTTP_RX_IDLE_MS  5000u /* 请求半截超时 */
-#define HTTP_TX_STALL_MS 10000u
+#define HTTP_RX_BUF      640u
+#define HTTP_HDR_MAX     256u  /* 下载头含 Content-Disposition ~170B */
+#define HTTP_BODY_BUF    704u  /* 最大 JSON (info) ~640B */
+#define HTTP_DL_CHUNK    512u
+#define HTTP_RX_IDLE_MS  5000u  /* 请求半截超时 */
+#define HTTP_TX_STALL_MS 10000u /* 响应无 ACK 超时 */
 #define HTTP_IDLE_MS     60000u /* keep-alive 空闲超时 */
 
 #define JSON_OK      "{\"ok\":true}"
@@ -103,7 +90,7 @@ static void http_process_rx(struct http_conn *c);
 
 /* ==================== 响应构造 ==================== */
 
-/* 组响应头并进入发送态。extra 为额外头域 (可 NULL, 如 Content-Encoding)。 */
+/* extra: 额外头域 (含行尾 \r\n, 可 NULL) */
 static bool rsp_begin(struct http_conn *c, const char *status, const char *ctype,
 		      uint32_t clen, bool keep, const char *extra)
 {
@@ -134,8 +121,7 @@ static bool rsp_begin(struct http_conn *c, const char *status, const char *ctype
 /* 内存响应 (body 指向 body_buf / 静态 gz) */
 static void respond_mem(struct http_conn *c, const char *status, const char *ctype,
 			const uint8_t *body, uint32_t len, bool keep,
-			const char *extra)
-{
+			const char *extra){
 	if (!rsp_begin(c, status, ctype, len, keep, extra)) {
 		c->kind = RESP_NONE;
 		return;
@@ -283,7 +269,6 @@ static void conn_pump(struct http_conn *c)
 			return;
 		}
 	} else {
-		/* 头 + 内存 body 逐片发送 (sndbuf 限制) */
 		while (c->hdr_sent < c->hdr_len || c->body_sent < c->body_len) {
 			const uint8_t *src;
 			uint32_t remain;
@@ -320,7 +305,7 @@ static void conn_pump(struct http_conn *c)
 		tcp_output(c->pcb);
 	}
 
-	/* 全部发出且全部确认: 响应完成 */
+	/* 全部写出且确认完毕: 响应完成 (keep-alive 或关闭) */
 	if (c->written >= c->rsp_total && c->acked >= c->rsp_total) {
 		bool keep = c->keep_alive;
 
@@ -335,8 +320,7 @@ static void conn_pump(struct http_conn *c)
 			return;
 		}
 		c->t_idle = now_ms();
-		/* 流水线残留 (少见): 继续解析 */
-		if (c->rx_len > 0) {
+		if (c->rx_len > 0) { /* 流水线残留 (少见) */
 			http_process_rx(c);
 		}
 	}
@@ -500,7 +484,7 @@ static void dispatch(struct http_conn *c, const char *method, const char *path,
 
 /* ==================== 请求解析 ==================== */
 
-/* rx 中找 \r\n\r\n, 返回其起始下标, 无则 -1 */
+/* rx 中找 \r\n\r\n 起始下标, 无则 -1 */
 static int find_hdr_end(const struct http_conn *c)
 {
 	for (uint16_t i = 0; i + 3 < c->rx_len; i++) {
@@ -512,7 +496,7 @@ static int find_hdr_end(const struct http_conn *c)
 	return -1;
 }
 
-/* 头段内大小写不敏感子串搜索 (限 hdr_end 范围) */
+/* 头段内大小写不敏感查找 */
 static const char *hdr_find(const char *line_start, uint16_t hdr_len, const char *key)
 {
 	size_t klen = strlen(key);
@@ -578,30 +562,29 @@ static void http_process_rx(struct http_conn *c)
 				}
 				return;
 			}
-			if (strcmp(method, "GET") == 0) {
-				/* GET: 立即派发, 无 body */
-				char *q = strchr(target, '?');
-				const char *query = NULL;
-
-				if (q != NULL) {
-					*q = '\0';
-					query = q + 1;
-				}
-				dispatch(c, method, target, query, NULL, 0);
-				/* 消费请求头, 残留转下一请求 */
-				uint16_t used = c->body_off;
-
-				memmove(c->rx, c->rx + used, c->rx_len - used);
-				c->rx_len -= used;
-				c->hdr_done = false;
-				conn_pump(c);
-				if (c->kind != RESP_NONE) {
-					return;
-				}
-				continue;
+			if (strcmp(method, "GET") != 0) {
+				continue; /* POST: 等 body 齐 */
 			}
+
+			char *q = strchr(target, '?');
+			const char *query = NULL;
+
+			if (q != NULL) {
+				*q = '\0';
+				query = q + 1;
+			}
+			dispatch(c, method, target, query, NULL, 0);
+			uint16_t used = c->body_off;
+
+			memmove(c->rx, c->rx + used, c->rx_len - used);
+			c->rx_len -= used;
+			c->hdr_done = false;
+			conn_pump(c);
+			if (c->kind != RESP_NONE) {
+				return;
+			}
+			continue;
 		}
-		/* POST: 等 body 齐 */
 		if ((uint16_t)(c->rx_len - c->body_off) >= c->content_len) {
 			char method[8] = {0};
 			char target[96] = {0};
@@ -648,8 +631,7 @@ static err_t http_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t 
 
 	uint16_t room = (uint16_t)(HTTP_RX_BUF - 1 - c->rx_len);
 
-	if (p->tot_len > room) {
-		/* 放不下: 超长请求直接拒绝 */
+	if (p->tot_len > room) { /* 超长请求: 拒绝 */
 		tcp_recved(pcb, p->tot_len);
 		pbuf_free(p);
 		respond_json_err(c, "400 Bad Request", "request too large");
@@ -746,7 +728,7 @@ static err_t http_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
 		}
 	}
 	if (c == NULL) {
-		tcp_abort(newpcb); /* 满 2 连接: 拒绝 (浏览器自动重试) */
+		tcp_abort(newpcb); /* 满 2 连接: 拒绝 (浏览器会重试) */
 		return ERR_ABRT;
 	}
 
@@ -757,9 +739,9 @@ static err_t http_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
 	tcp_arg(newpcb, c);
 	tcp_recv(newpcb, http_recv_cb);
 	tcp_sent(newpcb, http_sent_cb);
-	tcp_poll(newpcb, http_poll_cb, 2); /* interval 单位 ~0.5s */
+	tcp_poll(newpcb, http_poll_cb, 2); /* 单位 ~0.5s */
 	tcp_err(newpcb, http_err_cb);
-	tcp_nagle_disable(newpcb); /* 小 JSON 应答即时性 */
+	tcp_nagle_disable(newpcb);
 	LOG_INF("httpd: client %s:%u", ipaddr_ntoa(&newpcb->remote_ip),
 		(unsigned)newpcb->remote_port);
 	return ERR_OK;
@@ -791,6 +773,5 @@ static void http_listen_init(void *arg)
 
 void web_httpd_start(void)
 {
-	/* RAW API 须持 core lock: 转到 tcpip 线程执行 */
-	tcpip_callback(http_listen_init, NULL);
+	tcpip_callback(http_listen_init, NULL); /* RAW API 须在 tcpip 线程 */
 }

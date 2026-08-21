@@ -68,7 +68,7 @@ set(APP_SOURCES
     deps/ioLibrary/Ethernet/W5500/w5500.c
     deps/ioLibrary/Ethernet/socket.c
 )
-# Web SPA: gzip 压缩为 C 数组头 (确定性输出 mtime=0)
+# Web SPA: gzip 为 C 数组头 (确定性输出 mtime=0)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(WEB_INDEX_GZ_H ${CMAKE_CURRENT_BINARY_DIR}/generated/web_index_gz.h)
 add_custom_command(
@@ -80,7 +80,7 @@ add_custom_command(
     DEPENDS src/web/index.html tools/gen_gz.py
     COMMENT "gzip index.html -> web_index_gz.h"
 )
-# 生成头作为目标源文件: CMake 自动在编译依赖它的 TU 前执行 custom command
+# 生成头列入目标源: 编译前自动执行 custom command
 list(APPEND APP_SOURCES ${WEB_INDEX_GZ_H})
 # LwIP 2.1.3 core sources (FreeRTOS + NO_SYS=0 mode)
 set(LWIP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/deps/lwip)

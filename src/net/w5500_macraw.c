@@ -1,19 +1,12 @@
 /*
  * W5500 MACRAW netif driver for LwIP.
  *
- * Socket 0 in MACRAW mode, 16KB RX + 16KB TX buffers.
- * Sn_MR = MACRAW | MFEN | MMB (0xA4): 硬件只收广播 + 目的为本机 MAC 的单播,
- * 屏蔽网络上的多播风暴 (mDNS/SSDP/WS-Discovery)。MFEN 依据 SHAR 过滤,
- * netif->hwaddr 必须与 w5500_net_init() 写入 SHAR 的 mac 同源。
- *
- * 帧接收时序与 ioLibrary socket.c recvfrom() SOCK_MACRAW 分支一致:
- *   读 2 字节长度头 -> RECV + 等待 Sn_CR 清零 -> 读帧数据 -> RECV + 等待清零。
- * 帧头非法 (>1514) 按官方 SOCKFATAL_PACKLEN 策略 close 重开 socket 恢复同步。
- *
- * RX 为 10ms 轮询任务。socket 0 的多步命令序列由驱动级互斥保护:
- * tcpip 线程 (TX, Sn_CR_SEND) 与 rx 任务 (RX, Sn_CR_RECV) 并发写同一个
- * Sn_CR 寄存器会互相覆盖命令, 导致 RX 指针失步 —— ioLibrary 的 CRIS
- * 只保护单次 SPI 事务, 保护不了整个命令序列。
+ * Socket 0 MACRAW, 16KB RX/TX。收包时序与 ioLibrary recvfrom()
+ * SOCK_MACRAW 分支一致 (读 2B 长度头 -> RECV+等待 -> 读数据 ->
+ * RECV+等待); 坏头 (>1514) close 重开恢复同步。
+ * Sn_MR = MACRAW|MFEN|MMB: 只收广播+自身单播 (屏蔽多播风暴),
+ * netif->hwaddr 必须与 SHAR 同源。socket 0 命令序列由驱动级互斥
+ * 保护 -- tcpip 线程 (SEND) 与 rx 任务 (RECV) 并发写 Sn_CR 会互相覆盖。
  */
 
 #include <string.h>
@@ -91,8 +84,7 @@ static void macraw_unlock(void)
     }
 }
 
-/* RECV 命令 + 等待处理完成 (官方时序要求, 不等待会与芯片内部
- * 指针更新竞争) */
+/* RECV 命令 + 等待处理完成 (不等待会与芯片内部指针更新竞争) */
 static void macraw_recv_commit(void)
 {
     setSn_CR(MACRAW_SN, Sn_CR_RECV);
@@ -100,10 +92,9 @@ static void macraw_recv_commit(void)
     }
 }
 
-/* 重开 MACRAW socket (须持有 spi_lock)。用于初始化和失步恢复。 */
+/* 重开 MACRAW socket (须持有 spi_lock); 用于初始化和失步恢复 */
 static void macraw_open_socket(void)
 {
-    /* MFEN: 只收广播/多播/自身单播; MMB: 屏蔽多播 => 广播+自身单播 */
     close(MACRAW_SN);
     socket(MACRAW_SN, Sn_MR_MACRAW, 0, SF_ETHER_OWN | SF_MULTI_BLOCK);
 }
@@ -203,8 +194,7 @@ static struct pbuf *low_level_input(void)
     uint16_t framelen = hdr - 2; /* 长度头包含自身 2 字节 */
 
     if (framelen == 0 || framelen > MACRAW_MAX_FRAME) {
-        /* 官方 SOCKFATAL_PACKLEN 策略: 指针已失步, close 重开恢复 */
-        macraw_rx_badhdr++;
+        macraw_rx_badhdr++; /* 指针失步: close 重开恢复 */
         LOG_WRN("MACRAW RX: bad hdr=0x%04x rsr=%u, reopen", hdr, rsr);
         macraw_open_socket();
         macraw_unlock();
@@ -264,8 +254,7 @@ static void macraw_rx_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        /* 轮询: 每 10ms 检查 socket RX 缓冲 (EXTI 中断在当前板上不可靠) */
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(10)); /* 轮询 (EXTI 在当前板上不可靠) */
 
         if (getSn_RX_RSR(MACRAW_SN) == 0) {
             continue;
@@ -319,13 +308,13 @@ bool w5500_macraw_init(const uint8_t mac[6])
     }
     IP4_ADDR(&netmask, 255, 255, 255, 0);
 
-    /* hwaddr 与 w5500_net_init 写入 SHAR 的 mac 同源
-     * (MFEN 硬件过滤按 SHAR 比对目的地址) */
+    /* hwaddr 与 w5500_net_init 写入 SHAR 的 mac 同源 (MFEN 按 SHAR 过滤) */
     memcpy(w5500_netif.hwaddr, mac, 6);
 
     low_level_init(&w5500_netif);
 
-    /* netif RAW API 要求 core lock 持有者调用 (tcpip 线程已运行) */
+    /* netif RAW API 须持 core lock; ip4_route 要求 link-up 才路由,
+     * 之后由 net_mon_task 边沿调用 set_link 更新 */
     LOCK_TCPIP_CORE();
     bool link_now = ((getPHYCFGR() & PHYCFGR_LNK_ON) != 0);
     if (!netif_add(&w5500_netif, &ip_addr, &netmask, &gw,
@@ -337,10 +326,6 @@ bool w5500_macraw_init(const uint8_t mac[6])
     netif_set_default(&w5500_netif);
     netif_set_up(&w5500_netif);
     netif_added = true;
-
-    /* ip4_route 要求 netif link-up 才参与路由; 不设置则所有
-     * UDP/TCP 应答报 "No route"。初始状态按 PHY 实际链路设置,
-     * 之后由 net_mon_task (w5500.c) 的边沿调用 set_link 更新。 */
     if (link_now) {
         netif_set_link_up(&w5500_netif);
     }
@@ -367,7 +352,7 @@ bool w5500_macraw_get_mac(uint8_t mac[6])
     return true;
 }
 
-/* PHY 链路状态变化 (net_mon_task 500ms 轮询边沿调用) */
+/* netif_set_link_* 须持 core lock: net_mon_task 经 tcpip_thread 执行 */
 static void macraw_set_link_cb(void *arg)
 {
     bool up = ((uintptr_t)arg != 0);
@@ -384,6 +369,5 @@ void w5500_macraw_set_link(bool up)
     if (!netif_added) {
         return;
     }
-    /* netif_set_link_* 须持 core lock: 转到 tcpip 线程执行 */
     tcpip_callback(macraw_set_link_cb, (void *)(uintptr_t)(up ? 1u : 0u));
 }

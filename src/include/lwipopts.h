@@ -34,9 +34,7 @@
 #define TCP_SLOW_INTERVAL       500
 
 /* ---- Tcpip thread ---- */
-#define TCPIP_THREAD_STACKSIZE  1024  /* 4096 bytes (in words); UDP 回调+发送链
-                                           * (udp_input -> app -> udp_sendto ->
-                                           * ip4_route) 深栈, 2KB 会溢出 */
+#define TCPIP_THREAD_STACKSIZE  1024  /* words; UDP 回调+发送链深栈, 2KB 溢出过 */
 #define TCPIP_THREAD_PRIO       4
 #define TCPIP_MBOX_SIZE         8     /* tcpip thread mailbox slots */
 
@@ -45,10 +43,10 @@
 
 #define MEMP_NUM_PBUF           16
 #define MEMP_NUM_RAW_PCB        0
-/* mbtcp 2 并发 + httpd 2 并发 + 余量 (TCP_PCB_LISTEN 独立池) */
+/* mbtcp 2 + httpd 2 并发 + 余量 (LISTEN 为独立池) */
 #define MEMP_NUM_TCP_PCB        8
 #define MEMP_NUM_TCP_PCB_LISTEN 2
-/* httpd 流式发送多段在途: 2 连接 x ~8 段 + 重传余量 */
+/* httpd 流式发送多段在途 */
 #define MEMP_NUM_TCP_SEG        32
 #define MEMP_NUM_UDP_PCB        3   /* cfg + discover + margin */
 #define MEMP_NUM_NETBUF         0
@@ -56,13 +54,11 @@
 #define MEMP_NUM_SYS_TIMEOUT    6
 
 /* ---- Pbuf ---- */
-/* pbuf pool in CCM (64KB, no DMA limitation).
- * PBUF_POOL_BUFSIZE must >= 1500 + PBUF_LINK_HLEN (14) for full Ethernet frame. */
-#define PBUF_POOL_SIZE          16  /* 16 × 1540B ≈ 24.6KB, 在 CCM (64KB) 内 */
+/* pbuf pool in CCM (64KB, no DMA limitation). */
+#define PBUF_POOL_SIZE          16  /* 16 × 1540B ≈ 24.6KB */
 #define PBUF_POOL_BUFSIZE       1540
 #define PBUF_LINK_HLEN          14
 #define PBUF_ETH_HLEN           14
-/* PBUF_IP_HLEN: use LwIP default (20 for IPv4) */
 
 /* ---- TCP ---- */
 #define TCP_MSS                 1460  /* 1500 - 40 (IP+TCP headers) */
@@ -77,7 +73,7 @@
 #define UDP_TTL                 64
 
 /* ---- Checksums ---- */
-/* STM32F407 has no hardware checksum for TCP/UDP; compute in software. */
+/* STM32F407 无硬件校验和, 全软件计算 */
 #define CHECKSUM_GEN_IP         1
 #define CHECKSUM_GEN_UDP        1
 #define CHECKSUM_GEN_TCP        1
@@ -88,8 +84,7 @@
 #define CHECKSUM_CHECK_ICMP     1
 
 /* ---- Debug ---- */
-/* 调试期曾开启 (printf 诊断在 tcpip 线程同步执行, 每包数十 ms 延迟),
- * 已完成 UDP/MACRAW bring-up, 关闭。需要时改回 1 + 打开模块开关。 */
+/* printf 诊断在 tcpip 线程同步执行 (每包数十 ms 延迟), 默认关闭 */
 #define LWIP_DEBUG              0
 #define LWIP_DBG_TYPES_ON       LWIP_DBG_OFF
 #define LWIP_DBG_MIN_LEVEL      0

@@ -135,8 +135,7 @@ void history_sync(void)
 
 /* ==================== Web/HTTP 文件访问 ==================== */
 
-/* web 下载会话 (httpd 单客户端串行使用; open/read/close 之间不持锁,
- * 每次 lfs 操作单独持锁与写任务互斥) */
+/* 下载会话 (httpd 单客户端串行使用; 每次 lfs 操作单独持锁) */
 static lfs_file_t web_fp;
 static bool web_fp_open;
 

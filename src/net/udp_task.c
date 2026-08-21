@@ -1,9 +1,7 @@
 /*
- * UDP 配置服务传输层 — LwIP 回调模型 (替代 ioLibrary socket API).
- *
- * 使用 LwIP UDP PCB 监听端口 8600, recv 回调处理命令并发送应答.
- * 不再占用 ioLibrary socket (MACRAW 接管 socket 0 后, ioLibrary socket
- * 不可用). 跨网段过滤逻辑保持不变.
+ * UDP 配置服务传输层: LwIP UDP PCB 监听 8600, recv 回调处理命令
+ * (替代 ioLibrary socket API, MACRAW 接管 socket 0 后不可用)。
+ * 跨网段过滤逻辑保持不变。
  */
 
 #include <string.h>
@@ -26,10 +24,9 @@
 #define UDP_CFG_PORT       8600u
 #define UDP_CFG_BCAST_PORT (UDP_CFG_PORT + 1u)
 
-/* 诊断探针: 回调调用计数 (可在 RAM 中通过 ST-LINK 读取) */
+/* 诊断探针: 回调计数 (RAM 探针, ST-LINK 可读) */
 volatile uint32_t udp_recv_calls;
 volatile uint32_t udp_recv_bytes;
-
 
 static struct udp_pcb *cfg_pcb;
 
@@ -115,8 +112,7 @@ static void udp_cfg_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     }
 }
 
-/* tcpip 回调: RAW API (udp_new/bind/recv) 不持 core lock,
- * 须在 tcpip 线程上下文执行, 避免与 udp_input 遍历 udp_pcbs 竞态 */
+/* RAW API 须在 tcpip 线程执行 (避免与 udp_input 遍历 udp_pcbs 竞态) */
 static void udp_cfg_init_cb(void *arg)
 {
     (void)arg;

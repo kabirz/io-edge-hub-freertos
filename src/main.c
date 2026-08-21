@@ -128,7 +128,6 @@ static StaticTask_t boot_tcb;
 /* littlefs 实例: boot 任务静态持有 (挂载后须永久有效), history_init 保存指针 */
 static lfs_t lfs;
 
-/* 历史文件命名时钟 (io_epoch 适配 time_t 签名) */
 static time_t hist_clock_fn(void)
 {
     return (time_t)io_now_epoch();
@@ -243,8 +242,7 @@ static void boot_task(void *arg)
     update_holding_reg(HOLDING_TIMESTAMP_LO_IDX, (uint16_t)now);
 
 
-    /* 历史文件命名时钟: newlib time() 未接 RTC (恒 -1, 文件名会变
-     * data_0101_075959), 注入 io_now_epoch (sys/time.c 的 RTC 源) */
+    /* newlib time() 未接 RTC (恒 -1), 命名时钟注入 io_now_epoch */
     hist_file_set_clock(hist_clock_fn);
 
     if (lfs_port_mount(&lfs, w25qxx_flash()) == 0) {

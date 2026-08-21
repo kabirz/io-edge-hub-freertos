@@ -2,13 +2,9 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Web 命令执行器 + 共享 JSON 构造器 (Zephyr 版 src/web/httpd.c + ws_io.c
- * 对应物的移植; httpd.c 与后续 WS 推送共用)
- *
- *   - 写路径与 Modbus 回调共用 io_write_do_bit / io_write_holding
- *     (副作用与 FC05/FC06 完全一致)
- *   - HOLDING_REBOOT_IDX 拦截: 立即重启会掐断 HTTP 应答, 改走
- *     set_reboot_status 延迟重启 (心跳任务刷日志后复位)
+ * Web 命令执行器 + 共享 JSON 构造器 (Zephyr 版移植, httpd.c 与后续
+ * WS 推送共用)。写路径与 Modbus 回调共用 io_write_* (副作用同 FC05/FC06);
+ * 重启寄存器拦截为 set_reboot_status 延迟重启, 保住 HTTP 应答。
  */
 
 #include <stdio.h>
@@ -76,7 +72,7 @@ int web_build_info_json(char *buf, size_t bufsz)
 	return (n > (int)bufsz) ? (int)bufsz : n;
 }
 
-/* 实时 IO 快照 (Zephyr ws_io_build_status 的对应物, HTTP/WS 共用) */
+/* 实时 IO 快照 */
 int web_build_io_json(char *buf, size_t bufsz)
 {
 	uint16_t di = get_input_reg(INPUT_DI_IDX);
@@ -108,8 +104,7 @@ int web_build_regs_json(char *buf, size_t bufsz)
 	int n = snprintf(buf, bufsz, "{\"t\":\"regs\",\"holding\":[");
 
 	for (int i = 0; i < MODBUS_HOLDING_REGISTER_NUMBERS; i++) {
-		/* io_read_holding: 时间戳寄存器返回实时时间 (与 FC03 一致),
-		 * 否则 web 上时间戳恒为 0 且不动 */
+		/* io_read_holding: 时间戳寄存器返回实时时间 (同 FC03) */
 		n += snprintf(buf + n, bufsz - n, "%s%u", i ? "," : "", io_read_holding(i));
 	}
 	n += snprintf(buf + n, bufsz - n, "],\"input\":[");
@@ -137,18 +132,15 @@ int web_cmd_exec_reg(int32_t addr, int32_t value)
 		return -1;
 	}
 	if (addr == HOLDING_REBOOT_IDX) {
-		/* 立即重启会掐断 HTTP 应答, 改走延迟重启 (心跳任务收尾) */
 		if (value) {
-			set_reboot_status(true);
+			set_reboot_status(true); /* 延迟重启, 保住 HTTP 应答 */
 		}
 		return 0;
 	}
 	return io_write_holding((uint16_t)addr, (uint16_t)value);
 }
 
-/* ==================== 系统配置命令 (POST /api/cfg, 字段均可选) ====================
- * {"ip":"192.168.12.101","rs485":9600,"sid":1,"can_bps":250,"can_id":273}
- * 校验通过才写入 holding_reg; 失败时 *err 指向静态错误描述 */
+/* 系统配置批量写 (POST /api/cfg, 字段均可选; 校验通过才写入) */
 int web_cmd_exec_cfg(const char *json, size_t len, const char **err)
 {
 	static const char *e_bad_ip = "invalid ip";
@@ -160,7 +152,6 @@ int web_cmd_exec_cfg(const char *json, size_t len, const char **err)
 	char ip_str[16];
 	int32_t v;
 
-	/* IP: 点分十进制字符串, 复用 UDP/Modbus 同一套合法性规则 */
 	if (json_get_str(json, len, "ip", ip_str, sizeof(ip_str))) {
 		unsigned int a, b, c, d;
 
@@ -176,8 +167,7 @@ int web_cmd_exec_cfg(const char *json, size_t len, const char **err)
 		io_write_holding(HOLDING_IP_OCTET4_IDX, (uint16_t)d);
 	}
 
-	/* RS485 波特率: 常用 Modbus 范围 */
-	if (json_get_i32(json, len, "rs485", &v)) {
+	if (json_get_i32(json, len, "rs485", &v)) { /* 1200..115200 */
 		if (v < 1200 || v > 115200) {
 			*err = e_bad_rs;
 			return -1;
@@ -185,8 +175,7 @@ int web_cmd_exec_cfg(const char *json, size_t len, const char **err)
 		io_write_holding(HOLDING_RS485_BAUDRATE_IDX, (uint16_t)v);
 	}
 
-	/* Modbus slave id: 1-247 */
-	if (json_get_i32(json, len, "sid", &v)) {
+	if (json_get_i32(json, len, "sid", &v)) { /* 1..247 */
 		if (v < 1 || v > 247) {
 			*err = e_bad_sid;
 			return -1;
@@ -194,8 +183,7 @@ int web_cmd_exec_cfg(const char *json, size_t len, const char **err)
 		io_write_holding(HOLDING_SLAVE_ID_IDX, (uint16_t)v);
 	}
 
-	/* CAN 波特率 (寄存器存 x1000): 常用档位 */
-	if (json_get_i32(json, len, "can_bps", &v)) {
+	if (json_get_i32(json, len, "can_bps", &v)) { /* 常用档位 */
 		if (v != 50 && v != 100 && v != 125 && v != 250 && v != 500 && v != 800 &&
 		    v != 1000) {
 			*err = e_bad_can;
@@ -204,8 +192,7 @@ int web_cmd_exec_cfg(const char *json, size_t len, const char **err)
 		io_write_holding(HOLDING_CAN_BAUDRATE_IDX, (uint16_t)v);
 	}
 
-	/* CAN ID: 标准帧 1-0x7FF */
-	if (json_get_i32(json, len, "can_id", &v)) {
+	if (json_get_i32(json, len, "can_id", &v)) { /* 标准帧 1..0x7FF */
 		if (v < 1 || v > 0x7FF) {
 			*err = e_bad_cid;
 			return -1;

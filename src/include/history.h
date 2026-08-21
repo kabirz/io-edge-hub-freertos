@@ -31,29 +31,26 @@ void history_enable_write(bool en);
 void history_sync(void);
 
 /* ==================== Web/HTTP 文件访问 (httpd.c 调用) ====================
- * 所有调用与历史写任务共享同一把串行锁, 每次 lfs 操作单独持锁
- * (下载分块读之间放锁, 不阻塞采样落盘)。单客户端串行使用。 */
+ * 与历史写任务共享同一把串行锁, 每次 lfs 操作单独持锁 (下载分块读
+ * 之间放锁, 不阻塞采样落盘)。单客户端串行使用。 */
 
-/* 文件名合法性: data_ 前缀 + 字母数字/._-, 6..31 字符 (杜绝路径穿越) */
+/* 文件名合法性: data_ 前缀 + 字母数字/._-, 6..31 字符 (防路径穿越) */
 bool history_web_name_valid(const char *name);
 
-/* {"files":[{"name":"..","size":N},..]} 写入 buf, 返回长度; fs 未就绪 -1 */
+/* {"files":[...]} 写入 buf, 返回长度; fs 未就绪 -1 */
 int history_web_list_json(char *buf, size_t bufsz);
 
-/* 打开 data_* 供下载, 返回文件大小; -1 = 未挂载/非法名/打开失败 */
+/* 打开 data_* 供下载, 返回文件大小, -1 失败 */
 int history_web_open(const char *name);
 
-/* 顺序分块读 (单客户端串行), 返回实际字节数 (0 = EOF, <0 错误) */
+/* 顺序分块读: >=0 实际字节 (0=EOF), <0 错误 */
 int history_web_read(uint8_t *buf, uint16_t len);
 
-/* 关闭下载文件 (幂等) */
-void history_web_close(void);
+void history_web_close(void); /* 幂等 */
 
-/* 删除 data_* 文件, 0 成功 */
-int history_web_remove(const char *name);
+int history_web_remove(const char *name); /* 0 成功 */
 
-/* lfs 容量 (字节); fs 未就绪时输出 0/0 */
-void history_web_usage(uint64_t *free_b, uint64_t *total_b);
+void history_web_usage(uint64_t *free_b, uint64_t *total_b); /* 字节, 未挂载 0/0 */
 
 #ifdef __cplusplus
 }

@@ -2,8 +2,8 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Web 模块共用: 轻量 JSON 解析辅助 (只服务本模块固定的键名协议,
- * 不做完整 JSON 语法校验; 请求方为配套前端/脚本, 格式受控)
+ * 轻量 JSON 解析辅助: 只服务固定键名协议 (配套前端, 格式受控),
+ * 不做完整语法校验。Zephyr 版同文件移植。
  */
 
 #ifndef __WEB_JSON_H__
