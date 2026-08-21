@@ -87,6 +87,7 @@ set(APP_SOURCES
     src/io/adc.c
     src/web/httpd.c
     src/web/web_cmds.c
+    src/web/ws.c
     deps/littlefs/lfs.c
     deps/littlefs/lfs_util.c
     deps/ioLibrary/Ethernet/wizchip_conf.c

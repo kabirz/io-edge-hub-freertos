@@ -5,7 +5,7 @@
  * HTTP/1.1 服务器 (端口 80): gzip SPA + REST API, Zephyr 版 web 的移植。
  * 回调全在 tcpip 线程; 响应按 tcp_sndbuf 分片 ACK 驱动发送 (在途
  * <= 4*MSS); 下载分块独立持 hist_lock, 不阻塞采样落盘。
- * WS (/ws) 暂缺: 页面自动回退轮询, cfg 走 POST /api/cfg。
+ * /ws 升级握手在本文件识别, 会话移交 ws.c (单连接, 推送/命令/固件升级)。
  */
 
 #include <stdio.h>
@@ -25,6 +25,7 @@
 
 #include "web_json.h"
 #include "web_cmds.h"
+#include "ws.h"
 
 #include "log.h"
 
@@ -51,8 +52,9 @@ enum resp_kind {
 };
 
 struct http_conn {
-	struct tcp_pcb *pcb;
-	/* rx 累积与解析 */
+    struct tcp_pcb *pcb;
+    bool is_ws;               /* /ws 握手后: rx/feed 与推送移交 ws.c */
+    /* rx 累积与解析 */
 	uint16_t rx_len;
 	bool hdr_done;
 	uint16_t body_off;   /* body 在 rx 中的起点 */
@@ -80,6 +82,7 @@ struct http_conn {
 
 static struct http_conn http_conns[HTTP_MAX_CONN];
 static struct tcp_pcb *listen_pcb;
+static struct http_conn *ws_conn; /* 被 ws 会话接管的连接 */
 
 static uint32_t now_ms(void)
 {
@@ -153,6 +156,13 @@ static void respond_json_err(struct http_conn *c, const char *status, const char
 
 static void conn_close(struct http_conn *c, const char *why)
 {
+	if (c->is_ws) {
+		c->is_ws = false;
+		if (ws_conn == c) {
+			ws_conn = NULL;
+		}
+		ws_detach();
+	}
 	if (c->pcb != NULL) {
 		tcp_arg(c->pcb, NULL);
 		tcp_recv(c->pcb, NULL);
@@ -164,11 +174,22 @@ static void conn_close(struct http_conn *c, const char *why)
 		LOG_INF("httpd: closed (%s)", why);
 	}
 	if (c->kind == RESP_FILE) {
-		history_web_close();
+			history_web_close();
+		}
+		c->kind = RESP_NONE;
+		c->rx_len = 0;
+		c->hdr_done = false;
+}
+
+/* ws.c 会话关闭回调 (tcpip 线程): pcb 归 httpd, 由其收尾 */
+static void ws_closed_cb(void)
+{
+	if (ws_conn != NULL) {
+		struct http_conn *c = ws_conn;
+
+		ws_conn = NULL;
+		conn_close(c, "ws close");
 	}
-	c->kind = RESP_NONE;
-	c->rx_len = 0;
-	c->hdr_done = false;
 }
 
 /* 文件下载: 头先行, 再分块填 4*MSS 在途窗口 */
@@ -573,6 +594,45 @@ static void http_process_rx(struct http_conn *c)
 				*q = '\0';
 				query = q + 1;
 			}
+
+			/* /ws 升级: 会话移交 ws.c (单连接, 忙则 503) */
+			if (strcmp(target, "/ws") == 0 &&
+			    hdr_find(c->rx, hdr_len, "Upgrade: websocket") != NULL) {
+				char resp[160];
+				uint16_t rl = 0;
+
+				if (ws_active() ||
+				    !ws_handshake(c->rx, hdr_len, resp, sizeof(resp),
+						  &rl)) {
+					respond_json_err(c, "503 Service Unavailable",
+							 "ws busy");
+				} else {
+					memcpy(c->hdr, resp, rl);
+					c->hdr_len = rl;
+					c->hdr_sent = 0;
+					c->body = NULL;
+					c->body_len = 0;
+					c->written = 0;
+					c->acked = 0;
+					c->rsp_total = rl;
+					c->kind = RESP_MEM;
+					c->keep_alive = true;
+					c->t_ack = now_ms();
+					c->is_ws = true;
+					ws_conn = c;
+					/* 残余字节 = WS 帧 (客户端不等 101 ACK) */
+					memmove(c->rx, c->rx + c->body_off,
+						c->rx_len - c->body_off);
+					c->rx_len -= c->body_off;
+					ws_attach(c->pcb, (const uint8_t *)c->rx,
+						  c->rx_len, ws_closed_cb);
+					c->rx_len = 0;
+					c->hdr_done = false;
+					conn_pump(c);
+					return;
+				}
+			}
+
 			dispatch(c, method, target, query, NULL, 0);
 			uint16_t used = c->body_off;
 
@@ -629,6 +689,16 @@ static err_t http_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t 
 		return err;
 	}
 
+	/* WS 会话: 字节流直喂 ws.c 帧解析器 */
+	if (c->is_ws) {
+		tcp_recved(pcb, p->tot_len);
+		for (struct pbuf *q = p; q != NULL; q = q->next) {
+			ws_feed((const uint8_t *)q->payload, q->len);
+		}
+		pbuf_free(p);
+		return ERR_OK;
+	}
+
 	uint16_t room = (uint16_t)(HTTP_RX_BUF - 1 - c->rx_len);
 
 	if (p->tot_len > room) { /* 超长请求: 拒绝 */
@@ -666,6 +736,9 @@ static err_t http_sent_cb(void *arg, struct tcp_pcb *pcb, u16_t len)
 	}
 	c->acked += len;
 	c->t_ack = now_ms();
+	if (c->is_ws) {
+		return ERR_OK; /* 101 已 ACK 后无状态机要推进 */
+	}
 	conn_pump(c);
 	return ERR_OK;
 }
@@ -677,6 +750,10 @@ static err_t http_poll_cb(void *arg, struct tcp_pcb *pcb)
 
 	(void)pcb;
 	if (c == NULL || c->pcb == NULL) {
+		return ERR_OK;
+	}
+	if (c->is_ws) {
+		ws_poll(); /* 推送节律由 poll (~1s) 驱动; 无空闲超时 */
 		return ERR_OK;
 	}
 	if (c->kind != RESP_NONE) {
@@ -702,6 +779,13 @@ static void http_err_cb(void *arg, err_t err)
 	LOG_WRN("httpd: conn err %d", (int)err);
 	if (c != NULL) {
 		/* pcb 已被栈释放 */
+		if (c->is_ws) {
+			c->is_ws = false;
+			if (ws_conn == c) {
+				ws_conn = NULL;
+			}
+			ws_detach();
+		}
 		if (c->kind == RESP_FILE) {
 			history_web_close();
 		}
@@ -773,5 +857,6 @@ static void http_listen_init(void *arg)
 
 void web_httpd_start(void)
 {
+	ws_init(); /* ws fw 工作任务 + op 队列 */
 	tcpip_callback(http_listen_init, NULL); /* RAW API 须在 tcpip 线程 */
 }
