@@ -16,3 +16,6 @@
 [submodule "deps/lwip"]
 	path = deps/lwip
 	url = https://github.com/lwip-tcpip/lwip.git
+[submodule "deps/mcuboot"]
+	path = deps/mcuboot
+	url = https://github.com/mcu-tools/mcuboot.git
