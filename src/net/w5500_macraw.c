@@ -358,6 +358,15 @@ bool w5500_macraw_link_up(void)
     return netif_is_link_up(&w5500_netif);
 }
 
+bool w5500_macraw_get_mac(uint8_t mac[6])
+{
+    if (!netif_added) {
+        return false;
+    }
+    memcpy(mac, w5500_netif.hwaddr, 6);
+    return true;
+}
+
 /* PHY 链路状态变化 (net_mon_task 500ms 轮询边沿调用) */
 static void macraw_set_link_cb(void *arg)
 {

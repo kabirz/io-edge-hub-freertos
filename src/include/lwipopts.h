@@ -41,13 +41,15 @@
 #define TCPIP_MBOX_SIZE         8     /* tcpip thread mailbox slots */
 
 /* ---- Memory ---- */
-#define MEM_SIZE                (16u * 1024)   /* 16 KB LwIP heap (SRAM) */
+#define MEM_SIZE                (24u * 1024)   /* 24 KB LwIP heap (CCM) */
 
 #define MEMP_NUM_PBUF           16
 #define MEMP_NUM_RAW_PCB        0
-#define MEMP_NUM_TCP_PCB        4   /* Modbus TCP: max 2 concurrent + margin */
+/* mbtcp 2 并发 + httpd 2 并发 + 余量 (TCP_PCB_LISTEN 独立池) */
+#define MEMP_NUM_TCP_PCB        8
 #define MEMP_NUM_TCP_PCB_LISTEN 2
-#define MEMP_NUM_TCP_SEG        8
+/* httpd 流式发送多段在途: 2 连接 x ~8 段 + 重传余量 */
+#define MEMP_NUM_TCP_SEG        32
 #define MEMP_NUM_UDP_PCB        3   /* cfg + discover + margin */
 #define MEMP_NUM_NETBUF         0
 #define MEMP_NUM_NETCONN        0
@@ -65,7 +67,7 @@
 /* ---- TCP ---- */
 #define TCP_MSS                 1460  /* 1500 - 40 (IP+TCP headers) */
 #define TCP_SND_BUF             (4 * TCP_MSS)
-#define TCP_SND_QUEUELEN        (2 * TCP_SND_BUF / TCP_MSS)
+#define TCP_SND_QUEUELEN        16
 #define TCP_WND                 (4 * TCP_MSS)
 #define TCP_OOSEQ_MAX           4
 #define LWIP_TCP_KEEPALIVE      0

@@ -34,6 +34,7 @@
 #include "w25qxx.h"       /* w25qxx_init / w25qxx_flash */
 #include "lfs_port.h"     /* lfs_port_mount / lfs_t */
 #include "history.h"      /* history_init */
+#include "history_file.h" /* hist_file_set_clock */
 #include "io.h"           /* dio_start / adc_start */
 #include "io_can.h"       /* can_start / mod_can_send */
 #include "w5500.h"        /* w5500_net_init / w5500_net_ready */
@@ -52,6 +53,8 @@ extern uint32_t _sccmram, _eccmram;
  * 仅 main 接线使用, 不单设头文件) */
 extern void mb_tcp_start(void);
 extern void mb_rtu_start(void);
+/* Web 服务启动入口 (src/web/httpd.c, 同上) */
+extern void web_httpd_start(void);
 
 UART_HandleTypeDef huart1;
 
@@ -124,6 +127,12 @@ static StaticTask_t boot_tcb;
 
 /* littlefs 实例: boot 任务静态持有 (挂载后须永久有效), history_init 保存指针 */
 static lfs_t lfs;
+
+/* 历史文件命名时钟 (io_epoch 适配 time_t 签名) */
+static time_t hist_clock_fn(void)
+{
+    return (time_t)io_now_epoch();
+}
 
 /* ================================================================
  * MAC 派生: STM32 96-bit UID 折叠为唯一 MAC (前 3B = Wiznet OUI)
@@ -234,6 +243,10 @@ static void boot_task(void *arg)
     update_holding_reg(HOLDING_TIMESTAMP_LO_IDX, (uint16_t)now);
 
 
+    /* 历史文件命名时钟: newlib time() 未接 RTC (恒 -1, 文件名会变
+     * data_0101_075959), 注入 io_now_epoch (sys/time.c 的 RTC 源) */
+    hist_file_set_clock(hist_clock_fn);
+
     if (lfs_port_mount(&lfs, w25qxx_flash()) == 0) {
         history_init(&lfs);
     } else {
@@ -269,6 +282,7 @@ static void boot_task(void *arg)
     mb_tcp_start();
     mb_rtu_start();
     udp_cfg_start();
+    web_httpd_start();
 
 
     LOG_INF("io-edge-hub ready");

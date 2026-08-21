@@ -17,6 +17,8 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -128,5 +130,155 @@ void history_sync(void)
 	/* 重启前 / FTP/HTTP 读文件前调用: 与写任务互斥地刷盘 */
 	xSemaphoreTake(hist_lock, portMAX_DELAY);
 	hist_file_sync();
+	xSemaphoreGive(hist_lock);
+}
+
+/* ==================== Web/HTTP 文件访问 ==================== */
+
+/* web 下载会话 (httpd 单客户端串行使用; open/read/close 之间不持锁,
+ * 每次 lfs 操作单独持锁与写任务互斥) */
+static lfs_file_t web_fp;
+static bool web_fp_open;
+
+bool history_web_name_valid(const char *name)
+{
+	size_t n = strlen(name);
+
+	if (strncmp(name, "data_", 5) != 0) {
+		return false;
+	}
+	for (size_t i = 0; i < n; i++) {
+		char c = name[i];
+		bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+			  (c >= 'A' && c <= 'Z') || c == '_' || c == '.' || c == '-';
+
+		if (!ok) {
+			return false;
+		}
+	}
+	return n > 5 && n < 32;
+}
+
+int history_web_list_json(char *buf, size_t bufsz)
+{
+	if (hist_lfs == NULL) {
+		return -1;
+	}
+
+	lfs_dir_t dir;
+	int n = 0;
+
+	xSemaphoreTake(hist_lock, portMAX_DELAY);
+	hist_file_sync();
+	n += snprintf(buf + n, bufsz - n, "{\"files\":[");
+	if (lfs_dir_open(hist_lfs, &dir, "/") == 0) {
+		struct lfs_info info;
+		bool first = true;
+
+		while (lfs_dir_read(hist_lfs, &dir, &info) > 0) {
+			if (info.type != LFS_TYPE_REG ||
+			    !history_web_name_valid(info.name)) {
+				continue;
+			}
+			n += snprintf(buf + n, bufsz - n,
+				      "%s{\"name\":\"%s\",\"size\":%u}",
+				      first ? "" : ",", info.name,
+				      (unsigned)info.size);
+			first = false;
+			if (n >= (int)bufsz - 64) {
+				break;
+			}
+		}
+		lfs_dir_close(hist_lfs, &dir);
+	}
+	n += snprintf(buf + n, bufsz - n, "]}");
+	xSemaphoreGive(hist_lock);
+	return (n > (int)bufsz) ? (int)bufsz : n;
+}
+
+int history_web_open(const char *name)
+{
+	if (hist_lfs == NULL || !history_web_name_valid(name)) {
+		return -1;
+	}
+
+	int rc = -1;
+
+	xSemaphoreTake(hist_lock, portMAX_DELAY);
+	if (!web_fp_open && lfs_file_open(hist_lfs, &web_fp, name,
+					  LFS_O_RDONLY) == 0) {
+		lfs_soff_t size = lfs_file_size(hist_lfs, &web_fp);
+
+		if (size >= 0) {
+			web_fp_open = true;
+			rc = (int)size;
+		} else {
+			lfs_file_close(hist_lfs, &web_fp);
+		}
+	}
+	xSemaphoreGive(hist_lock);
+	return rc;
+}
+
+int history_web_read(uint8_t *buf, uint16_t len)
+{
+	if (!web_fp_open) {
+		return -1;
+	}
+
+	lfs_ssize_t n;
+
+	xSemaphoreTake(hist_lock, portMAX_DELAY);
+	n = lfs_file_read(hist_lfs, &web_fp, buf, len);
+	xSemaphoreGive(hist_lock);
+	return (int)n;
+}
+
+void history_web_close(void)
+{
+	if (!web_fp_open) {
+		return;
+	}
+	xSemaphoreTake(hist_lock, portMAX_DELAY);
+	lfs_file_close(hist_lfs, &web_fp);
+	xSemaphoreGive(hist_lock);
+	web_fp_open = false;
+}
+
+int history_web_remove(const char *name)
+{
+	if (hist_lfs == NULL || !history_web_name_valid(name)) {
+		return -1;
+	}
+
+	int rc;
+
+	xSemaphoreTake(hist_lock, portMAX_DELAY);
+	rc = lfs_remove(hist_lfs, name);
+	xSemaphoreGive(hist_lock);
+	return rc;
+}
+
+void history_web_usage(uint64_t *free_b, uint64_t *total_b)
+{
+	*free_b = 0;
+	*total_b = 0;
+	if (hist_lfs == NULL) {
+		return;
+	}
+
+	xSemaphoreTake(hist_lock, portMAX_DELAY);
+	struct lfs_fsinfo info;
+
+	if (lfs_fs_stat(hist_lfs, &info) == 0) {
+		lfs_ssize_t used = lfs_fs_size(hist_lfs);
+
+		*total_b = (uint64_t)info.block_count * info.block_size;
+		if (used >= 0) {
+			uint64_t used_b = (uint64_t)used * info.block_size;
+
+			*free_b = (used_b < *total_b) ? (*total_b - used_b) : 0;
+		}
+	}
 	xSemaphoreGive(hist_lock);
 }
