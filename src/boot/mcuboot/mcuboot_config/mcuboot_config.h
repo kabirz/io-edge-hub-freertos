@@ -10,6 +10,10 @@
 #ifndef MCUBOOT_CONFIG_H
 #define MCUBOOT_CONFIG_H
 
+#include "io_watchdog.h" /* watchdog_feed: MCUBOOT_WATCHDOG_FEED 展开
+                          * 到 bootutil 源中, 需声明 (GCC 14 起隐式
+                          * 函数声明为硬错误, -w 无法降级) */
+
 /* RSA-2048 签名验证 (mbedTLS 后端) */
 #define MCUBOOT_SIGN_RSA
 #define MCUBOOT_SIGN_RSA_LEN 2048
