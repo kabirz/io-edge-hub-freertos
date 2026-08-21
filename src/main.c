@@ -42,6 +42,7 @@
 #include "udp_cfg.h"      /* udp_cfg_start */
 #include "fw_upg.h"       /* fw_upg_os_init */
 #include "fw_udp.h"       /* fw_udp_start */
+#include "fw_can.h"       /* fw_can_start / fw_can_frame_isr */
 #include "wizchip_conf.h" /* getPHYCFGR / PHYCFGR_LNK_ON (boot 链路轮询) */
 
 #include "lwip/tcpip.h"   /* tcpip_init */
@@ -277,6 +278,8 @@ static void boot_task(void *arg)
     /* ---- IO 采样 (holding_reg 已加载) ---- */
     dio_start();
     adc_start();
+    fw_can_start(); /* CAN fw 队列+任务先于 can_start (ISR 入队依赖) */
+    can_set_rx_hook(fw_can_frame_isr);
     can_start();
 
 

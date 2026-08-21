@@ -16,10 +16,16 @@ extern "C" {
 #endif
 
 /* CAN1 初始化: 波特率取 holding_reg[0x07] (reg 值即 kbps, 默认 250) 查表,
- * RX 过滤器匹配 holding_reg[0x06] (业务 ID, 默认 0x0111), 启动后进入
- * 正常模式。失败不阻断启动 (对齐 Zephyr can_fw_upgrade: CAN 失败仅损失
- * CAN 功能)。main 在 adc_start 之后、网络之前调用一次。 */
+ * RX 过滤器 = 业务 ID (holding_reg[0x06], 默认 0x0111) 精确匹配 +
+ * 0x100-0x1FF 段 (固件升级协议), 启动后进入正常模式。失败不阻断启动
+ * (对齐 Zephyr can_fw_upgrade: CAN 失败仅损失 CAN 功能)。
+ * main 在 adc_start 之后、网络之前调用一次。 */
 void can_start(void);
+
+/* RX 帧消费者注入 (ISR 上下文回调; 须在 can_start() 前注册):
+ * 命中过滤器的标准帧交 fn, 未注册时静默丢弃 + 计数 */
+void can_set_rx_hook(
+    void (*fn)(uint32_t id, const uint8_t *data, uint8_t dlc));
 
 /* 发送标准数据帧 (Zephyr 版 mod_can_send 对应物):
  *   - len > 8 或未初始化 -> -1

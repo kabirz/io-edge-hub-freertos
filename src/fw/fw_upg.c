@@ -242,73 +242,89 @@ void fw_upg_abort(void)
 
 int fw_upg_finish(uint16_t crc_expect)
 {
-	uint16_t tail;
-	int rc = -1;
+    return fw_upg_finish_ex(crc_expect, true);
+}
 
-	lock_take();
-	if (!s.active) {
-		lock_give();
-		return -1;
-	}
-	s.active = false;
+int fw_upg_finish_ex(uint16_t crc_expect, bool check_crc)
+{
+    uint16_t tail;
+    int rc = -1;
 
-	tail = s.page_len;
-	if (s.failed || page_flush() != 0) {
-		goto out;
-	}
-	s.written += tail;
+    lock_take();
+    if (!s.active) {
+        lock_give();
+        return -1;
+    }
+    s.active = false;
 
-	if (s.written != s.total) {
-		goto out;
-	}
+    tail = s.page_len;
+    if (s.failed || page_flush() != 0) {
+        goto out;
+    }
+    s.written += tail;
 
-	/* 读回 CRC 校验 (64B 块累加) */
-	{
-		uint16_t crc = 0;
-		uint8_t buf[READ_CHUNK];
+    if (s.written != s.total) {
+        goto out;
+    }
 
-		for (uint32_t off = 0; off < s.total; off += READ_CHUNK) {
-			uint32_t n = s.total - off;
+    /* 读回 CRC 校验 (64B 块累加); CAN 紧急通道协议无 CRC 字段
+     * (对齐 Zephyr can_fw_upgrade), 完整性由 MCUboot 验签兜底 */
+    if (check_crc) {
+        uint16_t crc = 0;
+        uint8_t buf[READ_CHUNK];
 
-			if (n > READ_CHUNK) {
-				n = READ_CHUNK;
-			}
-			if (iof()->read(SLOT1_OFFSET + off, buf, n) != 0) {
-				goto out;
-			}
-			crc = crc16_ccitt(crc, buf, n);
-		}
-		if (crc != crc_expect) {
-			goto out;
-		}
-	}
+        for (uint32_t off = 0; off < s.total; off += READ_CHUNK) {
+            uint32_t n = s.total - off;
 
-	/* TLV keyhash 校验 (镜像自带公钥指纹) */
-	{
-		uint8_t kh[FW_KEYHASH_LEN];
+            if (n > READ_CHUNK) {
+                n = READ_CHUNK;
+            }
+            if (iof()->read(SLOT1_OFFSET + off, buf, n) != 0) {
+                goto out;
+            }
+            crc = crc16_ccitt(crc, buf, n);
+        }
+        if (crc != crc_expect) {
+            goto out;
+        }
+    }
 
-		if (tlv_keyhash_get(kh) != 0 ||
-		    memcmp(kh, fw_keyhash, FW_KEYHASH_LEN) != 0) {
-			goto out;
-		}
-	}
+    /* TLV keyhash 校验 (镜像自带公钥指纹) */
+    {
+        uint8_t kh[FW_KEYHASH_LEN];
 
-	rc = 0;
+        if (tlv_keyhash_get(kh) != 0 ||
+            memcmp(kh, fw_keyhash, FW_KEYHASH_LEN) != 0) {
+            goto out;
+        }
+    }
+
+    rc = 0;
 out:
-	s.failed = false;
-	s.written = 0;
-	lock_give();
-	return rc;
+    s.failed = false;
+    s.written = 0;
+    lock_give();
+    return rc;
 }
 
 uint32_t fw_upg_received(void)
 {
-	uint32_t r;
+    uint32_t r;
 
-	lock_take();
-	r = s.written + s.page_len;
-	lock_give();
-	return r;
+    lock_take();
+    r = s.written + s.page_len;
+    lock_give();
+    return r;
+}
+
+uint32_t fw_upg_total(void)
+{
+    uint32_t r;
+
+    lock_take();
+    r = s.active ? s.total : 0u;
+    lock_give();
+    return r;
 }
 
 bool fw_upg_active(void)

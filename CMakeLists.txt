@@ -110,7 +110,7 @@ add_custom_command(
 # 生成头列入目标源: 编译前自动执行 custom command
 list(APPEND APP_SOURCES ${WEB_INDEX_GZ_H})
 
-# 固件升级: fw 核心/UDP 通道 + bootutil_public (boot_set_pending 写
+# 固件升级: fw 核心/UDP/CAN 通道 + bootutil_public (boot_set_pending 写
 # slot1 trailer) + 共用 flash_map_backend (slot1 经 W25Q)
 set(MCUBOOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/deps/mcuboot)
 set(BOOTUTIL_DIR ${MCUBOOT_DIR}/boot/bootutil)
@@ -118,6 +118,7 @@ set(BOOT_PORT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/boot/mcuboot)
 list(APPEND APP_SOURCES
     src/fw/fw_upg.c
     src/fw/fw_udp.c
+    src/fw/fw_can.c
     src/storage/intflash.c
     ${BOOT_PORT_DIR}/flash_map_backend.c
     ${BOOTUTIL_DIR}/src/bootutil_public.c

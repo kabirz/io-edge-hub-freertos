@@ -8,11 +8,12 @@
  * FreeRTOS 移植:
  *   - 波特率 = holding_reg[0x07] (reg 值即 kbps, 默认 250) 查位时序表
  *     (CAN 时钟 = PCLK1 = 42MHz), SJW=1; 非法值 (含 800k) 回落 250k
- *   - RX: 过滤器组 0 / FIFO0 / 16 位标识符掩码模式, 精确匹配业务 ID
- *     (holding_reg[0x06], 默认 0x0111), 收到即静默丢弃 + 计数 (对齐
- *     Zephyr: can_fw_upgrade 库 mask=0 全收 + RX 线程分发, 应用侧
- *     mod_can_app_rx 对业务帧只 LOG_DBG 即返回 -- 无固件升级/业务处理,
- *     合并为 ISR 内静默消费; 不再逐帧 LOG_WRN 未处理帧)
+ *   - RX: 过滤器组 0 / FIFO0 / 16 位标识符掩码模式, 两组半槽:
+ *     半槽 A 精确匹配业务 ID (holding_reg[0x06], 默认 0x0111),
+ *     半槽 B 接收 0x100-0x1FF 段 (固件升级协议 0x101-0x107);
+ *     命中帧经 can_set_rx_hook 注入消费者 (fw_can_frame_isr -> 队列
+ *     -> fw 任务, 对齐 Zephyr can_fw_upgrade 库 msgq + RX 线程),
+ *     未注入时静默丢弃 + 计数
  *   - TX: mod_can_send() 发送 API (现无调用者, 现版固件无周期推送)
  *   - 波特率/ID 启动快照: 运行期写寄存器只存不生效, 重启后经
  *     config_store 应用 (与 RS485/Modbus 从站号同语义)
@@ -65,6 +66,15 @@ CAN_HandleTypeDef hcan1;
 static bool started;       /* can_start 成功完成 */
 static uint32_t can_rx_frames; /* 静默消费计数 (仅 ISR 写) */
 
+/* RX 帧消费者注入 (fw_can_frame_isr); 须在 can_start() 前注册。
+ * ISR 上下文调用, 消费者自行保证 ISR 安全 (入队)。 */
+static void (*can_rx_hook)(uint32_t id, const uint8_t *data, uint8_t dlc);
+
+void can_set_rx_hook(void (*fn)(uint32_t id, const uint8_t *data, uint8_t dlc))
+{
+    can_rx_hook = fn;
+}
+
 /* ==================== 发送 (任务上下文) ==================== */
 
 int mod_can_send(uint32_t id, const uint8_t *data, uint8_t len)
@@ -101,8 +111,8 @@ int mod_can_send(uint32_t id, const uint8_t *data, uint8_t len)
 
 /* ==================== RX 静默消费 (ISR 上下文) ==================== */
 
-/* HAL 弱回调重载: FIFO0 消息挂起 (CAN1_RX0_IRQ)。读出即丢 + 计数,
- * 无 FreeRTOS 调用 (ISR 纯度); FMP0>0 期间中断持续重入直至排空 */
+/* HAL 弱回调重载: FIFO0 消息挂起 (CAN1_RX0_IRQ)。读出注入消费者
+ * (无消费者时丢弃+计数); FMP0>0 期间中断持续重入直至排空 */
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
     static CAN_RxHeaderTypeDef rx_hdr;
@@ -112,7 +122,11 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
         return;
     }
     (void)HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rx_hdr, rx_data);
-    can_rx_frames++;
+    if (can_rx_hook != NULL && rx_hdr.IDE == CAN_ID_STD) {
+        can_rx_hook(rx_hdr.StdId, rx_data, rx_hdr.DLC);
+    } else {
+        can_rx_frames++;
+    }
 }
 
 /* ==================== 中断向量 ==================== */
@@ -154,16 +168,18 @@ void can_start(void)
     uint16_t id = get_holding_reg(HOLDING_CAN_ID_IDX) & 0x7FFu;
     const CAN_FilterTypeDef filt = {
         /* 16 位标识符掩码模式: FR1 = (MaskLow<<16)|IdLow,
-         * FR2 = (MaskHigh<<16)|IdHigh, 两组各为独立的 16 位
-         * id/mask 过滤器, 帧命中任一组即入 FIFO0 (HAL 源码
+         * FR2 = (MaskHigh<<16)|IdHigh, 两组各为独立的 16 位 id/mask
+         * 过滤器, 帧命中任一组即入 FIFO0 (HAL 源码
          * stm32f4xx_hal_can.c 16BIT 分支实证)。标准 ID 半字布局
-         * = STID[10:0]<<5, 故 (id<<5, 0x7FF<<5) = 该组精确匹配
-         * 业务 ID; 两组同配 -- 任一组为 (0,0) 都会退化为全收,
-         * 与"精确匹配"目标矛盾。掩码 RTR/IDE 位为 0 = don't-care
-         * (16 位刻度下半字 bit4=RTR/bit3=IDE), 远端帧按 STID 同判通过 */
-        .FilterIdHigh = (uint32_t)id << 5,
+         * = STID[10:0]<<5:
+         *   半槽 A (FR1) = (id<<5, 0x7FF<<5) 精确匹配业务 ID;
+         *   半槽 B (FR2) = (0x100<<5, 0x700<<5) 接收 0x100-0x1FF 段
+         *     (固件升级协议 0x101-0x107; 业务 ID 可配到段外)。
+         * 掩码 RTR/IDE 位为 0 = don't-care (16 位刻度下半字
+         * bit4=RTR/bit3=IDE), 远端帧按 STID 同判通过 */
+        .FilterIdHigh = 0x100u << 5,
         .FilterIdLow = (uint32_t)id << 5,
-        .FilterMaskIdHigh = 0x7FFu << 5,
+        .FilterMaskIdHigh = 0x700u << 5,
         .FilterMaskIdLow = 0x7FFu << 5,
         .FilterFIFOAssignment = CAN_FILTER_FIFO0,
         .FilterBank = 0,
@@ -171,7 +187,7 @@ void can_start(void)
         .FilterScale = CAN_FILTERSCALE_16BIT,
         .FilterActivation = ENABLE,
         .SlaveStartFilterBank = 14, /* F407 双 CAN: 0-13 归 CAN1,
-				     * 仅用组 0, 值取 CubeMX 惯例 */
+					     * 仅用组 0, 值取 CubeMX 惯例 */
     };
     size_t i;
     const uint8_t n = sizeof(can_timing_table) / sizeof(can_timing_table[0]);

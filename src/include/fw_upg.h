@@ -42,8 +42,15 @@ void fw_upg_abort(void);
  * 否则复位会话并返回 -1 */
 int fw_upg_finish(uint16_t crc_expect);
 
+/* 同上但可跳过 CRC (CAN 紧急通道协议无 CRC 字段, 对齐 Zephyr
+ * can_fw_upgrade; 完整性由 MCUboot 验签兜底) */
+int fw_upg_finish_ex(uint16_t crc_expect, bool check_crc);
+
 /* 已收字节数 (FW_DATA 应答回显) */
 uint32_t fw_upg_received(void);
+
+/* 会话目标总字节数 (未激活返回 0; CAN UPDATE_SUCCESS 判定用) */
+uint32_t fw_upg_total(void);
 
 bool fw_upg_active(void);
 
