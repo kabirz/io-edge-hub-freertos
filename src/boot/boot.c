@@ -2,12 +2,12 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * MCUboot 引导占位主程序 (裸机, 无 RTOS)。T1 阶段: 时钟 + 外部 NOR
- * 探测 + 跳转 slot0 应用; T2 起接入 bootutil 验签/SWAP, T6 接入 CAN
- * 紧急升级。
+ * MCUboot 引导主程序 (裸机, 无 RTOS): bootutil 验签 + SWAP_SCRATCH +
+ * 跳转 slot0 应用。T6 起接入 CAN 紧急升级救援循环。
  *
  * 上电即喂 IWDG: IWDG 一旦启动跨软复位持续计数 (仅上电复位清零),
- * app 会话启动过的 IWDG 在 boot 的 SWAP 期间必须继续喂。
+ * app 会话启动过的 IWDG 在 boot 的 SWAP 期间必须继续喂
+ * (bootutil 经 MCUBOOT_WATCHDOG_FEED 逐块喂)。
  */
 
 #include <stdint.h>
@@ -22,6 +22,13 @@
 
 #include "boot_uart.h"
 
+#include "bootutil/bootutil.h"
+#include "mbedtls/memory_buffer_alloc.h"
+
+/* mbedTLS 静态内存池 (boot 域无 newlib malloc): RSA-2048 验签峰值
+ * 约 2KB mpi 临时量, 8KB 留足裕量 */
+static unsigned char mbed_arena[8192];
+
 /* w25qxx.c 长擦除轮询会调用; boot 不启动 IWDG, 直接刷新计数器
  * (对未启动的 IWDG 写 KR 是无操作) */
 void watchdog_feed(void)
@@ -29,11 +36,13 @@ void watchdog_feed(void)
     IWDG->KR = 0xAAAAu;
 }
 
-/* 跳转 slot0 应用: 关中断 -> 停 tick -> VTOR/MSP -> Reset_Handler。
- * app 的 SystemInit 以 VECT_TAB_OFFSET 重设 VTOR, 此处先设一次保证
- * 跳转指令流期间的取向量窗口正确 */
-static void boot_jump_app(uint32_t sp, uint32_t pc)
+/* 跳转应用: 关中断 -> 停 tick -> VTOR/MSP -> Reset_Handler。
+ * vec = 应用向量表地址 (镜像头之后), sp/pc 取前两项 */
+static void boot_jump_vec(uint32_t vec)
 {
+    uint32_t sp = *(volatile uint32_t *)vec;
+    uint32_t pc = *(volatile uint32_t *)(vec + 4u);
+
     __disable_irq();
     SysTick->CTRL = 0;
     HAL_NVIC_DisableIRQ(TIM7_IRQn);
@@ -42,7 +51,7 @@ static void boot_jump_app(uint32_t sp, uint32_t pc)
     /* 清 pending, 防止 app 早期使能中断时误入 */
     NVIC->ICPR[0] = 0xFFFFFFFFu;
 
-    SCB->VTOR = APP_ADDR;
+    SCB->VTOR = vec;
     __set_CONTROL(0); /* 特权 + MSP */
     __DSB();
     __ISB();
@@ -51,22 +60,10 @@ static void boot_jump_app(uint32_t sp, uint32_t pc)
     NVIC_SystemReset(); /* 不可达: 跳转后 MSP 已切换 */
 }
 
-static void boot_try_boot(void)
-{
-    uint32_t sp = *(volatile uint32_t *)APP_ADDR;
-    uint32_t pc = *(volatile uint32_t *)(APP_ADDR + 4u);
-
-    /* 栈顶落在主 SRAM 且入口在 slot0 地址范围内视为镜像存在 */
-    if (sp >= 0x20000000u && sp <= 0x20020000u &&
-        pc >= APP_ADDR && pc < APP_ADDR + SLOT0_SIZE && (pc & 1u) != 0u) {
-        boot_log("boot: jump app @%08x", (unsigned)pc);
-        boot_jump_app(sp, pc); /* noreturn */
-    }
-    boot_log("boot: no valid app in slot0");
-}
-
 int main(void)
 {
+    struct boot_rsp rsp;
+
     HAL_Init();   /* NVIC 分组 + TIM7 tick (HAL_Delay 就绪) */
     board_init(); /* 168MHz 时钟 + GPIO 端口时钟 */
     boot_uart_init();
@@ -74,16 +71,28 @@ int main(void)
     watchdog_feed();
     boot_log("io-edge-hub boot v%d.%d.%d_%s", FW_VERSION_MAJOR,
              FW_VERSION_MINOR, FW_VERSION_PATCH, FW_GIT_VERSION);
+    mbedtls_memory_buffer_alloc_init(mbed_arena, sizeof(mbed_arena));
 
+    /* 外部 NOR (slot1/scratch 所在); 失败仅失去升级能力, slot0 仍可启动 */
     if (w25qxx_init() != 0) {
         boot_log("boot: W25Q128 not present");
     } else {
         boot_log("boot: NOR ok");
     }
 
-    boot_try_boot();
+    /* MCUboot: 验签 slot0 + 检查 slot1 升级请求 (SWAP_SCRATCH) */
+    if (boot_go(&rsp) == 0) {
+        uint32_t vec = rsp.br_image_off + rsp.br_hdr->ih_hdr_size;
 
-    /* 无有效 app: 常驻等待 (T6 起 = CAN 紧急升级救援循环) */
+        boot_log("boot: img@%08x v%d.%d.%d", (unsigned)vec,
+                 rsp.br_hdr->ih_ver.iv_major, rsp.br_hdr->ih_ver.iv_minor,
+                 rsp.br_hdr->ih_ver.iv_revision);
+        boot_jump_vec(vec);
+    }
+
+    boot_log("boot: no valid image");
+
+    /* 无有效镜像: 常驻等待 (T6 起 = CAN 紧急升级救援循环) */
     for (;;) {
         watchdog_feed();
         HAL_Delay(200);

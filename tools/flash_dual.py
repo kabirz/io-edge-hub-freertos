@@ -35,6 +35,7 @@ def run(args, timeout=120):
 
 def main():
     mass_erase = '--me' in sys.argv
+    full = '--full' in sys.argv
     t = threading.Thread(target=lambda: read_serial(35), daemon=True)
     t.start()
     time.sleep(0.5)
@@ -44,6 +45,17 @@ def main():
         rc = run(['-c', 'SWD', 'SWCLK=4000', '-ME'])
         if rc != 0:
             sys.exit(1)
+    if full:
+        print("=== program full (boot+signed app) ===")
+        rc = run(['-c', 'SWD', 'SWCLK=4000', '-P', BUILD + r'\full.hex',
+                  '-V', '-Rst'])
+        if rc != 0:
+            sys.exit(1)
+        t.join(timeout=30)
+        print(f"\n=== COM9: {len(collected)} bytes ===")
+        data = collected.decode('ascii', errors='replace')
+        print(data[-3000:])
+        return
     print("=== program boot ===")
     rc = run(['-c', 'SWD', 'SWCLK=4000', '-P', BUILD + r'\boot.hex', '-V'])
     if rc != 0:

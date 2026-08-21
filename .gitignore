@@ -9,3 +9,6 @@ build-host/
 *.map
 *.log
 build-host-win/  
+ 
+# MCUboot signing private key 
+tools/keys/*.pem 

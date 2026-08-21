@@ -32,7 +32,13 @@
 #define SLOT0_OFFSET     0x00010000u
 #define SLOT0_SIZE       0x00070000u /* 448KB */
 #define SLOT0_ADDR       (INT_FLASH_BASE + SLOT0_OFFSET)
-#define APP_ADDR         SLOT0_ADDR  /* app 链接基址 = slot0 */
+
+/* MCUboot 镜像头保留 (imgtool --header-size): 头 32B + 填充至向量表
+ * (VTOR 需 128B 对齐, 取 0x200 对齐 Zephyr)。app 链接基址 = 镜像
+ * 向量表实际位置 */
+#define IMG_HDR_SIZE     0x00000200u
+#define APP_ADDR         (SLOT0_ADDR + IMG_HDR_SIZE)
+#define APP_FLASH_SIZE   (SLOT0_SIZE - IMG_HDR_SIZE)
 
 /* ---- 外部 W25Q128 (io_flash 绝对偏移) ---- */
 #define SLOT1_OFFSET     0x00000000u

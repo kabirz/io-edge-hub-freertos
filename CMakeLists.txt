@@ -173,13 +173,14 @@ target_compile_definitions(fw.elf PRIVATE
 if(APP_RELEASE)
     target_compile_definitions(fw.elf PRIVATE LOG_ENABLE=0)
 endif()
-# app 固件位于 slot0 (@0x08010000): SystemInit 必须按偏移重设 VTOR
-# (system_stm32f4xx.c 默认写 FLASH_BASE=0x08000000, 会指回 boot)
+# app 固件位于 slot0 (@0x08010000) 镜像头 (0x200) 之后:
+# SystemInit 必须按偏移重设 VTOR (system_stm32f4xx.c 默认写
+# FLASH_BASE=0x08000000, 会指回 boot)
 target_compile_definitions(fw.elf PRIVATE
     USER_VECT_TAB_ADDRESS
-    VECT_TAB_OFFSET=0x10000U
+    VECT_TAB_OFFSET=0x10200U
 )
-gen_ld_script(fw.elf fw 0x8010000 448K)
+gen_ld_script(fw.elf fw 0x8010200 0x6FE00)
 # ioLibrary 上游不按本项目 -Wall -Wextra 级别维护, 仅这些文件关警告
 # (GCC 用 -w 全关, 排在 -Wall -Wextra 之后生效)
 set_source_files_properties(
@@ -266,7 +267,13 @@ stm32_generate_hex_file(fw.elf)
 
 # ==================== boot 引导镜像 (MCUboot 域, 裸机无 RTOS) ====================
 
-add_executable(boot.elf
+# MCUboot bootutil (deps/mcuboot @v2.1.0) + mbedTLS 3.0 (RSA 验签子集)
+set(MCUBOOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/deps/mcuboot)
+set(MBEDTLS_DIR ${MCUBOOT_DIR}/ext/mbedtls)
+set(BOOTUTIL_DIR ${MCUBOOT_DIR}/boot/bootutil)
+set(BOOT_PORT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/boot/mcuboot)
+
+set(BOOT_SOURCES
     src/boot/boot.c
     src/boot/boot_uart.c
     src/board/board.c
@@ -274,10 +281,32 @@ add_executable(boot.elf
     src/board/stm32f4xx_hal_timebase_tim.c
     src/storage/w25qxx.c
     src/storage/intflash.c
+    ${BOOT_PORT_DIR}/flash_map_backend.c
+    ${BOOT_PORT_DIR}/keys.c
+    ${BOOTUTIL_DIR}/src/bootutil_misc.c
+    ${BOOTUTIL_DIR}/src/bootutil_public.c
+    ${BOOTUTIL_DIR}/src/caps.c
+    ${BOOTUTIL_DIR}/src/fault_injection_hardening.c
+    ${BOOTUTIL_DIR}/src/image_rsa.c
+    ${BOOTUTIL_DIR}/src/image_validate.c
+    ${BOOTUTIL_DIR}/src/loader.c
+    ${BOOTUTIL_DIR}/src/swap_misc.c
+    ${BOOTUTIL_DIR}/src/swap_scratch.c
+    ${BOOTUTIL_DIR}/src/tlv.c
+    ${MBEDTLS_DIR}/library/platform_util.c
+    ${MBEDTLS_DIR}/library/platform.c
+    ${MBEDTLS_DIR}/library/bignum.c
+    ${MBEDTLS_DIR}/library/asn1parse.c
+    ${MBEDTLS_DIR}/library/oid.c
+    ${MBEDTLS_DIR}/library/rsa.c
+    ${MBEDTLS_DIR}/library/md.c
+    ${MBEDTLS_DIR}/library/sha256.c
+    ${MBEDTLS_DIR}/library/memory_buffer_alloc.c
     ${STM32_STARTUP_S}
     ${STM32_SYSTEM_C}
     stm32f4xx_hal_conf.h
 )
+add_executable(boot.elf ${BOOT_SOURCES})
 set_target_properties(boot.elf PROPERTIES OUTPUT_NAME boot)
 
 target_include_directories(boot.elf PRIVATE
@@ -285,8 +314,37 @@ target_include_directories(boot.elf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/board
     ${CMAKE_CURRENT_SOURCE_DIR}/src/include
     ${CMAKE_BINARY_DIR}/generated
+    # 移植层目录形状 (mcuboot_config/ sysflash/ flash_map_backend/ os/)
+    # 与 bootutil include 形状对接; mbedtls_conf 覆盖默认 mbedtls_config
+    ${BOOT_PORT_DIR}
+    ${BOOT_PORT_DIR}/mbedtls_conf
+    ${BOOTUTIL_DIR}/include
+    ${MBEDTLS_DIR}/include
 )
 target_compile_options(boot.elf PRIVATE -Wall -Wextra -Os)
+# 上游代码不按本项目警告级别维护
+set_source_files_properties(
+    ${BOOTUTIL_DIR}/src/bootutil_misc.c
+    ${BOOTUTIL_DIR}/src/bootutil_public.c
+    ${BOOTUTIL_DIR}/src/caps.c
+    ${BOOTUTIL_DIR}/src/fault_injection_hardening.c
+    ${BOOTUTIL_DIR}/src/image_rsa.c
+    ${BOOTUTIL_DIR}/src/image_validate.c
+    ${BOOTUTIL_DIR}/src/loader.c
+    ${BOOTUTIL_DIR}/src/swap_misc.c
+    ${BOOTUTIL_DIR}/src/swap_scratch.c
+    ${BOOTUTIL_DIR}/src/tlv.c
+    ${MBEDTLS_DIR}/library/platform_util.c
+    ${MBEDTLS_DIR}/library/platform.c
+    ${MBEDTLS_DIR}/library/bignum.c
+    ${MBEDTLS_DIR}/library/asn1parse.c
+    ${MBEDTLS_DIR}/library/oid.c
+    ${MBEDTLS_DIR}/library/rsa.c
+    ${MBEDTLS_DIR}/library/md.c
+    ${MBEDTLS_DIR}/library/sha256.c
+    ${MBEDTLS_DIR}/library/memory_buffer_alloc.c
+    PROPERTIES COMPILE_OPTIONS "-w"
+)
 target_link_libraries(boot.elf PRIVATE
     HAL::STM32::F4::RCC
     HAL::STM32::F4::GPIO
@@ -296,6 +354,7 @@ target_link_libraries(boot.elf PRIVATE
     HAL::STM32::F4::TIM
     HAL::STM32::F4::TIMEx # HAL_TIM_IRQHandler 引用 TIMEx 弱回调
     HAL::STM32::F4::FLASH
+    HAL::STM32::F4::FLASHEx # HAL_FLASHEx_Erase (intflash 扇区擦除)
     STM32::F407xx
     STM32::NoSys
 )
