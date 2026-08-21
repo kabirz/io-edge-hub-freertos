@@ -56,13 +56,24 @@ docs/                   ACCEPTANCE.md (上机验收) / KNOWN_DEVIATIONS.md (已�
 
 ## 依赖初始化
 
+**按需初始化 (推荐)** —— `deps/STM32CubeF4` 声明了 ~55 个嵌套子模块
+(BSP 板级驱动/USB/FatFs/LibJPEG 等中间件), `deps/mcuboot` 声明了 7 个
+(Cypress PSOC 库), 其中构建只需要 3 个。**不要用 `--recursive`**:
+
 ```bash
-git submodule update --init --recursive
+# 顶层 7 个子模块 (stm32-cmake / FreeRTOS / littlefs / ioLibrary /
+# STM32CubeF4 / lwip / mcuboot, 全部构建必需, 不递归)
+git submodule update --init
+
+# 只补 3 个必需的嵌套子模块
+git submodule update --init \
+  deps/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver \
+  deps/STM32CubeF4/Drivers/CMSIS/Device/ST/STM32F4xx \
+  deps/mcuboot/ext/mbedtls
 ```
 
-必须带 `--recursive`: `deps/STM32CubeF4` 自身还有嵌套子模块
-(`Drivers/STM32F4xx_HAL_Driver`、`Drivers/CMSIS/Device/ST/STM32F4xx`,
-构建必需)。不带 recursive 时 HAL/CMSIS 头文件缺失, 配置阶段即报错。
+不带这两个 HAL/CMSIS 嵌套子模块时, 配置阶段即报头文件缺失。
+带宽紧张可加 `--depth 1` (GitHub 支持按固定 SHA 浅取), 失败则去掉重试。
 
 ## 固件构建 (Windows CMD)
 
