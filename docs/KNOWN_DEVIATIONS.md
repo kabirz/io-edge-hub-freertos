@@ -38,67 +38,78 @@
    HAL_GetTick 忙等 <=100ms (不假设调用上下文可睡眠); id > 0x7FF
    按位域截断, Zephyr 版 `can_send` 传入非法 id 返回 -EINVAL。
    原因: 当前无调用者, 简化实现; 二期启用时再对齐错误语义。
+8. **boot 域 CAN 独立轮询驱动** (非行为偏差)。boot_can.c 使用
+   裸寄存器级 bxCAN 轮询 (无 HAL/无中断), 不走 HAL CAN 驱动。
+   NART=1 + ABOM=1, ONE_SHOT 发送, 全接收过滤器 mask=0。
+   协议行为 (帧 ID/命令码/512B 流控/CONFIRM magic) 与 app 域及
+   Zephyr 版完全一致, 差异在实现层, 不影响线上帧格式。
 
 ## ADC / RTU 时序
 
-8. **ADC 时钟 21MHz (PCLK2/4)**。Zephyr overlay 配 /2 = 42MHz, 超
+9. **ADC 时钟 21MHz (PCLK2/4)**。Zephyr overlay 配 /2 = 42MHz, 超
    F407 数据手册 ADC 时钟上限 (21/42MHz 档边界, 12bit 分辨率下
    规格值为 21MHz), 移植版取 /4 = 21MHz 规格内。影响: 采样转换
    时间略长, 换算结果位数不变。
-9. **RTU t3.5 定时**: >19200bps 固定 2ms (Modbus 规范推荐值;
-   Zephyr 版 >38400bps 约 1ms); 9600bps 时 t3.5 理论 4.01ms, 本版
-   ms 定时器分辨率向上双进位为 5ms。原因: 软件定时器以整 ms 为
-   粒度, 不引入 us 级定时器; t3.5 偏大只会让分帧更保守, 不错帧。
+10. **RTU t3.5 定时**: >19200bps 固定 2ms (Modbus 规范推荐值;
+    Zephyr 版 >38400bps 约 1ms); 9600bps 时 t3.5 理论 4.01ms, 本版
+    ms 定时器分辨率向上双进位为 5ms。原因: 软件定时器以整 ms 为
+    粒度, 不引入 us 级定时器; t3.5 偏大只会让分帧更保守, 不错帧。
 
 ## 诊断与溢出
 
-10. **RTU 溢出帧归类为尺寸违例**。接收缓冲满时整帧按
+11. **RTU 溢出帧归类为尺寸违例**。接收缓冲满时整帧按
     `BUS_MSG_SIZE_ERR` 丢弃; Zephyr 版会对截断帧继续做 CRC 校验,
     CRC 恰好正确时按正常帧处理。原因: 溢出帧内容已不可信, 直接
     丢弃更安全; 计数器仍记录。
-11. **MB_DIAG 计数器为共享 RMW**。多传输 (TCP/RTU) 的诊断计数为
+12. **MB_DIAG 计数器为共享 RMW**。多传输 (TCP/RTU) 的诊断计数为
     非原子读-改-写, 并发自增理论可丢计数。原因: 单字对齐读写本身
     原子, 仅 ++ 组合非原子; 诊断用途可容忍, 加锁不划算。
 
 ## UDP 配置协议
 
-12. **0x19 (FACTORY_RESET) 应答 ok 恒 1**。Zephyr 版应答回传配置区
+13. **0x19 (FACTORY_RESET) 应答 ok 恒 1**。Zephyr 版应答回传配置区
     擦除结果。原因: `config_store` 的擦除 API 无失败信号 (void
     语义), 擦失败时设备也会随后重启, ok 字段失去意义。
-13. **子网判定固定 /24**。跨网段白名单判定用 `remote & /24 ==
+14. **子网判定固定 /24**。跨网段白名单判定用 `remote & /24 ==
     local & /24`; Zephyr 版查 `net_if` 的实际掩码。原因: 本版掩码
     本身固定 /24 (W5500 静态配置), 与配置寄存器一致。
 
+## 固件升级协议
+
+15. **UDP V2 chunk 大小**。本版固定 1400B (FW_V2_CHUNK); Zephyr 版
+    Kconfig 默认 1024B。原因: 1400B 凑单以太网帧负载, 减少窗口数,
+    线上已验证兼容。
+
 ## 参数与标识
 
-14. **波特率 u16 上限 65535**。(非新偏差) holding 寄存器本身 16 位,
+16. **波特率 u16 上限 65535**。(非新偏差) holding 寄存器本身 16 位,
     Zephyr 现版同限; 写入 >65535 截断为低 16 位, 与现版一致, 注明
     以防误报。
-15. **MAC 无 01:02:03 回退**。Zephyr 版 hwinfo 读取失败回退
+17. **MAC 无 01:02:03 回退**。Zephyr 版 hwinfo 读取失败回退
     01:02:03:04:05:06; 本版 MAC 由 `UID_BASE` (96-bit 唯一 ID 的
     存储器映射) 折叠派生, 恒可读, 无失败路径, 回退分支自然消失。
-16. **开机 banner 的 flash/RAM 容量硬编码** (512/192KB)。Zephyr 版
+18. **开机 banner 的 flash/RAM 容量硬编码** (512/192KB)。Zephyr 版
     从 Kconfig 读。原因: 单板固定器件, 未引入构建期容量注入。
 
 ## 存储与体积
 
-17. **littlefs 文件缓存走 heap_4, 1KB/文件**。Zephyr 版由 Zephyr
+19. **littlefs 文件缓存走 heap_4, 1KB/文件**。Zephyr 版由 Zephyr
     系统堆/静态区供给。原因: FreeRTOS 侧统一 heap_4 (16KB 静态池)
     供给 —— 固件 newlib `_sbrk` 桩恒返回 ENOMEM, littlefs 默认
     malloc 路径上机必 `LFS_ERR_NOMEM`, 故经 `LFS_MALLOC` 钩子
     (`src/include/lfs_heap.h`) 显式路由到 `pvPortMalloc`。当前
     历史记录同一时刻仅打开 1 个文件 (峰值 1KB), 池余量充足;
     二期 web/FTP 多文件并发时重估池容量。
-18. **newlib stdio 全量链接 (+约 80KB text)**。littlefs 拉入
+20. **newlib stdio 全量链接 (+约 80KB text)**。littlefs 拉入
     snprintf/stdio 全家桶。可选优化: 换 `--specs=nano.specs`
     (newlib-nano) 可省 ~数十 KB; 当前 148KB flash 占用远低于 512KB
     器件容量 (预算 300KB), SRAM 侧静态占用 (data+bss) 实测
-    ≈ 50KB / 128KB (占 ~39%), 两项余量均充足, 一期不裁剪。
-19. **FC16 尾字节容忍规则 (非偏差)**: 写寄存器数与字节数不一致时
+    约 50KB / 128KB (占 ~39%), 两项余量均充足, 一期不裁剪。
+21. **FC16 尾字节容忍规则 (非偏差)**: 写寄存器数与字节数不一致时
     按字节数处理、忽略尾随字节, 与 Zephyr 版逐字节一致, 写明以防
     上机对比测试误报。
-20. **除 littlefs 外固件无运行时动态分配** (注记, 防误报)。除
-    littlefs 经 `LFS_MALLOC` 路由 heap_4 (第 17 条) 外, 固件无任何
+22. **除 littlefs 外固件无运行时动态分配** (注记, 防误报)。除
+    littlefs 经 `LFS_MALLOC` 路由 heap_4 (第 19 条) 外, 固件无任何
     运行时动态分配: newlib 的 malloc 依赖路径不可达 —— 日志仅
     整型/字符串格式化、无 FILE 流, ioLibrary 不 malloc, 故
     `src/sys/syscalls.c` 的 `_sbrk` 桩恒返回 ENOMEM 的路径同样
@@ -107,7 +118,7 @@
 
 ## 网络层 (W5500 / ioLibrary)
 
-21. **ioLibrary 调用无超时监督** (一期警示)。vendored ioLibrary 的
+23. **ioLibrary 调用无超时监督** (一期警示)。vendored ioLibrary 的
     `socket()`/`close()`/`sendto()` 内含无界寄存器轮询
     (`while (getSn_CR/SR ...)` 等待, 见 deps/ioLibrary/Ethernet/
     socket.c), 芯片异常 (寄存器读数恒错/无应答) 时可无限期挂死
@@ -117,7 +128,7 @@
     false); **运行中芯片失效** (init 已成功后损坏) 仍可能挂死。
     二期需为所有 ioLibrary 调用包一层有界监督 (超时返回错误),
     根除该风险。
-22. **链路断开时 netmon 无锁清 DO 与 FC05 锁内 RMW 并存**
+24. **链路断开时 netmon 无锁清 DO 与 FC05 锁内 RMW 并存**
     (非偏差)。netmon 任务检测到链路下降沿后在不持 Modbus 锁的
     状态下经 `update_holding_reg` + `mb_set_do` 清零 DO (含影子
     寄存器 0x00), 与主站 FC05 写 DO 的锁内读-改-写
@@ -127,9 +138,13 @@
 
 ## 环境说明
 
-- 主机单元测试 (`tests/`, 见 README) 在 Windows 原生 MSVC 与 WSL/Linux GCC
-  双编译器下均可构建运行 (11/11 基线); 曾记录"Windows 原生无编译器环境"
-  有误——MSVC 不在 CMD PATH 里, 但 CMake 的 Visual Studio 生成器可自动定位
-  VS 安装。MSVC 编译需 `/utf-8` (UTF-8 源码防 GBK 代码页双字节配对吞掉
-  注释结尾)、`gmtime_r`→`gmtime_s` 垫片与无弱符号处理 (见
-  `src/include/io_compat.h`、`tests/CMakeLists.txt`), 非固件行为偏差。
+25. **构建系统**。`build.sh` / `build.bat` 已移除, 所有操作 (子模块
+    初始化、编译、签名、烧录) 统一由 CMake 管理。签名密钥
+    `tools/keys/root-rsa2048.pem` 已入库, 构建时自动调用 imgtool
+    签名并合并为 `full.bin`/`full.hex`。烧录支持 `st-flash`、
+    `ST-LINK_CLI`、`pyocd` 三种工具, 通过 cmake target 选择。
+26. **主机单元测试** (`tests/`, 见 README) 在 Windows 原生 MSVC 与
+    WSL/Linux GCC 双编译器下均可构建运行 (12/12 基线)。MSVC 编译
+    需 `/utf-8` (UTF-8 源码防 GBK 代码页双字节配对吞掉注释结尾)、
+    `gmtime_r`→`gmtime_s` 垫片与无弱符号处理 (见
+    `src/include/io_compat.h`、`tests/CMakeLists.txt`), 非固件行为偏差。

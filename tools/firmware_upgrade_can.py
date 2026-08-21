@@ -1,21 +1,29 @@
 """CAN firmware upgrade client for the FreeRTOS io-edge-hub (PCAN-USB on
-Windows; protocol identical to apps/tools/firmware_upgrade can mode).
+Windows / SocketCAN on Linux; protocol identical to apps/tools/
+firmware_upgrade can mode).
 
 Usage:
-  python tools/firmware_upgrade_can.py version
+  python tools/firmware_upgrade_can.py version            # Windows (PCAN)
+  python tools/firmware_upgrade_can.py version -c can0    # Linux SocketCAN
   python tools/firmware_upgrade_can.py upgrade -f build/test-v0.3.10.bin
   python tools/firmware_upgrade_can.py reboot
 
+SocketCAN notes: bitrate is managed by ip link, not python-can. Bring the
+interface up first, e.g.
+  sudo ip link set can0 up type can bitrate 250000
+
 Protocol (libs/can_fw_upgrade parity):
   0x101 [cmd LE32][arg LE32] / 0x102 reply / 0x103 data (8B/frame,
-  ack every 64B) / 0x104 keyhash (5x [seq][7B]) / 0x105 version frags.
+  ack every 512B) / 0x104 keyhash (5x [seq][7B]) / 0x105 version frags.
 """
 import argparse
+import re
 import struct
 import sys
 import time
 
 import can
+from tqdm import tqdm
 
 CAN_ID_CMD = 0x101
 CAN_ID_REPLY = 0x102
@@ -32,23 +40,52 @@ FW_CODE_TRANSFER_ERROR = 5
 FW_CODE_KEYHASH_ERROR = 6
 
 CONFIRM_MAGIC = 0x55AA55AA
-ACK_INTERVAL_FRAMES = 8  # 64B / 8B
+ACK_INTERVAL_FRAMES = 64  # 512B / 8B, 对齐 Zephyr CAN_FW_OFFSET_REPLY_BYTES
+
+
+def resolve_iface(iface, channel):
+    """auto: canN/vcanN -> Linux SocketCAN, 其余 (PCAN_USBBUS1...) -> PCAN."""
+    if iface == 'auto':
+        return 'socketcan' if re.fullmatch(r'v?can\d+', channel) else 'pcan'
+    return iface
+
+
+def check_socketcan(channel):
+    """SocketCAN 码率由 ip link 管理; 未 UP 时给出可直接执行的命令."""
+    try:
+        state = open('/sys/class/net/%s/operstate' % channel).read().strip()
+    except OSError:
+        raise SystemExit('SocketCAN %s 不存在 (ip link 查看)' % channel)
+    if state != 'up':
+        raise SystemExit(
+            'SocketCAN %s 处于 %s, 先执行:\n'
+            '  sudo ip link set %s down type can bitrate <bitrate>\n'
+            '  sudo ip link set %s up' % (channel, state, channel, channel))
 
 
 class Dev:
-    def __init__(self, channel, bitrate):
-        self.bus = can.Bus(interface='pcan', channel=channel,
-                           bitrate=bitrate)
+    def __init__(self, iface, channel, bitrate):
+        if iface == 'socketcan':
+            check_socketcan(channel)
+            self.bus = can.Bus(interface='socketcan', channel=channel)
+        else:
+            self.bus = can.Bus(interface='pcan', channel=channel,
+                               bitrate=bitrate)
 
     def send(self, can_id, data):
         if len(data) > 8:
             raise SystemExit('CAN payload >8B')
         msg = can.Message(arbitration_id=can_id, data=data,
                           is_extended_id=False)
-        try:
-            self.bus.send(msg, timeout=1.0)
-        except can.CanError as e:
-            raise SystemExit('send 0x%03X failed: %s' % (can_id, e))
+        for attempt in range(10):
+            try:
+                self.bus.send(msg, timeout=1.0)
+                return
+            except can.CanError as e:
+                if 'No buffer space' in str(e) and attempt < 9:
+                    time.sleep(0.01)
+                    continue
+                raise SystemExit('send 0x%03X failed: %s' % (can_id, e))
 
     def recv(self, can_id=None, timeout=5.0):
         end = time.monotonic() + timeout
@@ -112,27 +149,31 @@ class Dev:
         if code != FW_CODE_OFFSET or arg != 0:
             raise SystemExit('START unexpected: code=%d arg=%d' % (code, arg))
 
-    def send_data(self, img):
+    def send_data(self, img, desc='upgrade'):
         off = 0
         n_in_block = 0
-        while off + 8 <= len(img):
-            self.send(CAN_ID_DATA, img[off:off + 8])
-            off += 8
-            n_in_block += 1
-            if n_in_block >= ACK_INTERVAL_FRAMES or off >= len(img):
+        with tqdm(total=len(img), unit='B', unit_scale=True,
+                  unit_divisor=1024, desc=desc) as bar:
+            while off + 8 <= len(img):
+                self.send(CAN_ID_DATA, img[off:off + 8])
+                off += 8
+                bar.update(8)
+                n_in_block += 1
+                if n_in_block >= ACK_INTERVAL_FRAMES or off >= len(img):
+                    code, arg = self.fw_reply()
+                    if code == FW_CODE_UPDATE_SUCCESS:
+                        return off
+                    if code != FW_CODE_OFFSET:
+                        raise SystemExit('data @%d: code=%d arg=%d' %
+                                         (off, code, arg))
+                    n_in_block = 0
+            if off < len(img):
+                self.send(CAN_ID_DATA, img[off:])
+                bar.update(len(img) - off)
+                off = len(img)
                 code, arg = self.fw_reply()
-                if code == FW_CODE_UPDATE_SUCCESS:
-                    return off
-                if code != FW_CODE_OFFSET:
-                    raise SystemExit('data @%d: code=%d arg=%d' %
-                                     (off, code, arg))
-                n_in_block = 0
-        if off < len(img):  # tail < 8B: real length (padding inflates count)
-            self.send(CAN_ID_DATA, img[off:])
-            off = len(img)
-            code, arg = self.fw_reply()
-            if code not in (FW_CODE_UPDATE_SUCCESS, FW_CODE_OFFSET):
-                raise SystemExit('tail data: code=%d arg=%d' % (code, arg))
+                if code not in (FW_CODE_UPDATE_SUCCESS, FW_CODE_OFFSET):
+                    raise SystemExit('tail data: code=%d arg=%d' % (off, code, arg))
         return off
 
     def confirm(self, permanent=True):
@@ -188,13 +229,20 @@ def main():
     ap.add_argument('cmd', choices=['version', 'upgrade', 'reboot',
                                     'bootupgrade', 'rescue'])
     ap.add_argument('-f', '--file')
-    ap.add_argument('--channel', default='PCAN_USBBUS1')
-    ap.add_argument('--bitrate', type=int, default=250000)
+    ap.add_argument('--iface', choices=['auto', 'socketcan', 'pcan'],
+                    default='auto',
+                    help='CAN backend (default: auto - canN->socketcan, '
+                         'else pcan)')
+    ap.add_argument('--channel', '-c', default='PCAN_USBBUS1',
+                    help='PCAN channel or SocketCAN interface (can0)')
+    ap.add_argument('--bitrate', type=int, default=250000,
+                    help='PCAN only; socketcan bitrate set via ip link')
     ap.add_argument('--test', action='store_true',
                     help='temporary upgrade (revert on next boot)')
     args = ap.parse_args()
 
-    dev = Dev(args.channel, args.bitrate)
+    dev = Dev(resolve_iface(args.iface, args.channel), args.channel,
+              args.bitrate)
     try:
         if args.cmd == 'version':
             print('version:', dev.get_version())
@@ -220,10 +268,7 @@ def main():
             dev.send_keyhash(kh)
             dev.start(len(img))
             print('slot0 erased, transferring...')
-            t0 = time.monotonic()
-            dev.send_data(img)
-            dt = max(time.monotonic() - t0, 1e-3)
-            print('%d bytes (%.0f B/s)' % (len(img), len(img) / dt))
+            dev.send_data(img, desc='slot0')
             dev.confirm(permanent=not args.test)
             print('confirmed; boot validates and starts new image')
             time.sleep(8)
@@ -237,10 +282,7 @@ def main():
         print('keyhash sent (5 frames)')
         dev.start(len(img))
         print('start ok, transferring...')
-        t0 = time.monotonic()
-        done = dev.send_data(img)
-        dt = max(time.monotonic() - t0, 1e-3)
-        print('%d/%d bytes (%.0f B/s)' % (done, len(img), done / dt))
+        dev.send_data(img)
         dev.confirm(permanent=not args.test)
         print('confirmed, rebooting for swap...')
         dev.fw_cmd(FW_CMD_REBOOT)

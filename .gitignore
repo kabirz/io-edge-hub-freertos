@@ -10,6 +10,4 @@ build-host/
 *.map
 *.log
 build-host-win/  
- 
-# MCUboot signing private key 
-tools/keys/*.pem 
+__pycache__

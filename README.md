@@ -56,44 +56,46 @@ docs/                   ACCEPTANCE.md (上机验收) / KNOWN_DEVIATIONS.md (已�
 
 ## 依赖初始化
 
-**按需初始化 (推荐)** —— `deps/STM32CubeF4` 声明了 ~55 个嵌套子模块
-(BSP 板级驱动/USB/FatFs/LibJPEG 等中间件), `deps/mcuboot` 声明了 7 个
-(Cypress PSOC 库), 其中构建只需要 3 个。**不要用 `--recursive`**:
+子模块在首次 `cmake` 配置时自动初始化 (检测 `FreeRTOS.h` 是否存在)。
+也可手动执行:
 
 ```bash
-# 顶层 7 个子模块 (stm32-cmake / FreeRTOS / littlefs / ioLibrary /
-# STM32CubeF4 / lwip / mcuboot, 全部构建必需, 不递归)
 git submodule update --init
-
-# 只补 3 个必需的嵌套子模块 (须从其父仓库内寻址)
 git -C deps/STM32CubeF4 submodule update --init \
   Drivers/STM32F4xx_HAL_Driver Drivers/CMSIS/Device/ST/STM32F4xx
 git -C deps/mcuboot submodule update --init ext/mbedtls
 ```
 
-或直接用一键脚本: **`build.bat`** (Windows) / **`build.sh`** (Linux),
-完成 拉取 -> 配置 -> 编译 -> 签名 (无私钥时跳过并提示)。build.sh 默认
-系统 arm-none-eabi (零 -D 参数), 编译探针校验布局兼容性, Zephyr SDK
-仅作兜底; 产物在 `build-linux/` (与 Windows 的 `build/` 隔离, 避免
-CMake 缓存冲突)。
+## 固件构建
 
-不带这两个 HAL/CMSIS 嵌套子模块时, 配置阶段即报头文件缺失。
-带宽紧张可加 `--depth 1` (GitHub 支持按固定 SHA 浅取), 失败则去掉重试。
+```bash
+cmake -B build -G Ninja
+cmake --build build
+```
 
-## 固件构建 (Windows CMD)
+工具链优先级: 系统 arm-none-eabi (默认) > 环境变量 STM32_TOOLCHAIN_PATH > Zephyr SDK。
+签名在构建时自动完成 (需 `tools/keys/root-rsa2048.pem` + `pip install imgtool`)。
 
-工具链: Zephyr SDK 0.17.0 的 arm-zephyr-eabi GCC 12.2 (与 Zephyr 版
-开发环境共用一套 SDK; 全 newlib, `STM32::NoSys` 链接)。SDK 不在 PATH
-时通过 `STM32_TOOLCHAIN_PATH` / `STM32_TARGET_TRIPLET` 指定:
+Windows 需指定工具链:
 
 ```bat
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug ^
-  -DCMAKE_TOOLCHAIN_FILE=deps/stm32-cmake/cmake/stm32_gcc.cmake ^
+cmake -B build -G Ninja ^
   -DSTM32_TOOLCHAIN_PATH=C:/Users/jxwaz/zephyr-sdk-0.17.0/arm-zephyr-eabi ^
-  -DSTM32_TARGET_TRIPLET=arm-zephyr-eabi ^
-  -DSTM32_CUBE_F4_PATH=deps/STM32CubeF4 ^
-  -DFREERTOS_PATH=deps/FreeRTOS-Kernel
+  -DSTM32_TARGET_TRIPLET=arm-zephyr-eabi
 cmake --build build
+```
+
+产物:
+- `build/fw.bin` / `build/fw.signed.bin` — 应用固件
+- `build/full.bin` / `build/full.hex` — 全片烧录 (boot + 签名 app)
+
+## 烧录
+
+```bash
+cmake --build build --target flash          # st-flash
+cmake --build build --target stlink_flash   # stlink
+cmake --build build --target pyocd_flash    # pyocd
+```
 ```
 
 产物: `build/boot.elf` (MCUboot 引导, 裸机) + `build/fw.elf` (app, 链接在
@@ -102,7 +104,7 @@ slot0 镜像头之后, 不可直接烧录 —— 须经签名流水线)。
 Release 构建 (整体关闭日志, `LOG_*` 编译为空):
 
 ```bat
-cmake -S . -B build-rel -G Ninja -DCMAKE_BUILD_TYPE=Release ^
+cmake -B build-rel -G Ninja -DCMAKE_BUILD_TYPE=Release ^
   -DCMAKE_TOOLCHAIN_FILE=deps/stm32-cmake/cmake/stm32_gcc.cmake ^
   -DSTM32_TOOLCHAIN_PATH=C:/Users/jxwaz/zephyr-sdk-0.17.0/arm-zephyr-eabi ^
   -DSTM32_TARGET_TRIPLET=arm-zephyr-eabi ^
@@ -117,8 +119,7 @@ cmake --build build-rel
 `sudo apt install gcc-arm-none-eabi libnewlib-arm-none-eabi`)。任何
 arm-none-eabi GCC (如 xpack) 均可 —— 把 `STM32_TOOLCHAIN_PATH` 指向
 其安装根目录 (含 `bin/`、`arm-none-eabi/`), `STM32_TARGET_TRIPLET=
-arm-none-eabi`; `build.sh` 的编译探针会先验证布局兼容性。
-Windows 开发机实际使用 Zephyr SDK 0.17.0 (`build.bat` 默认值)。
+arm-none-eabi`; 编译探针会先验证布局兼容性。
 
 ## 主机单元测试
 
@@ -168,15 +169,17 @@ app 域: `boot_set_pending` 写 slot1 trailer 请求换机。
 
 ## 签名流水线与密钥
 
+签名已集成到 CMake 构建中, `cmake --build` 自动完成:
+`fw.bin` → imgtool 签名 → `fw.signed.bin` → 合并 boot + 填充 → `full.bin`/`full.hex`。
+
 ```bat
 python tools\gen_keys.py     & :: 首次生成 tools/keys/root-rsa2048.pem
-python tools\sign_fw.py      & :: fw.elf -> fw.bin -> 签名 -> full.hex
+cmake --build build           & :: 编译 + 签名 (自动)
 ```
 
-- `sign_fw.py` 输出 `build/fw.bin` (原始 app) / `build/fw.signed.bin`
-  (MCUboot 镜像) / `build/full.hex` (boot + 填充 + 签名 app, 全片烧录用)。
+- 构建时自动调用 imgtool 签名: `fw.bin` → `fw.signed.bin` (MCUboot RSA-2048)。
 - 私钥 `tools/keys/*.pem` 已被 .gitignore, **永不入库**。
-- 公钥指纹 (SHA256 of DER) 由 `tools/gen_keyhash.py` 生成
+- 公钥指纹 (SHA256 of DER) 由 CMake 自动调用 `tools/gen_keyhash.py` 生成
   `build/generated/fw_keyhash.h`, 所有升级通道在擦 flash 前比对。
 - 镜像内 TLV 自带 KEYHASH, 签名验证在 MCUboot 换机/启动时完成。
 
@@ -206,12 +209,11 @@ SWD (ST-Link / J-Link), 芯片内部 flash 基址 `0x08000000`。
 
 首次烧录 / 全片恢复 (boot + 签名 app 一次写入):
 
-```bat
-python tools\sign_fw.py
-python tools\flash_dual.py --me --full
+```bash
+cmake --build build --target flash
 ```
 
-只更新 boot: `ST-LINK_CLI -c SWD SWCLK=4000 -P build\boot.hex -V -Rst`
+只更新 boot: `cmake --build build --target flash` (会自动重新签名合并)
 (注意: `-P` 后的 `-Rst` 实测不放行核心, 需再补一次独立 `-Rst`;
 `flash_dual.py` 已内置)。外部 NOR 的 slot1/scratch/config/littlefs
 分区不受 mass erase 影响, 升级残留状态由 MCUboot 自动恢复或忽略。

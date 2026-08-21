@@ -67,18 +67,19 @@ static void lock_take(void) {}
 static void lock_give(void) {}
 #endif
 
-/* ==================== CRC16-CCITT (Zephyr crc16_ccitt 逐式) ==================== */
+/* ==================== CRC16-CCITT (Zephyr crc16_ccitt 逐式移植) ==================== */
 
 static uint16_t crc16_ccitt(uint16_t seed, const uint8_t *src, uint32_t len)
 {
-	while (len-- > 0) {
-		seed = (uint16_t)((seed >> 8) | (seed << 8));
-		seed ^= *src++;
-		seed ^= (uint16_t)((seed & 0xFFu) >> 4);
-		seed ^= (uint16_t)(seed << 12);
-		seed ^= (uint16_t)((seed & 0xFFu) << 5);
-	}
-	return seed;
+    while (len-- > 0) {
+        uint8_t e = (uint8_t)(seed ^ *src++);
+        uint8_t f = (uint8_t)(e ^ (e << 4));
+        seed = (uint16_t)((seed >> 8) ^
+                          ((uint16_t)f << 8) ^
+                          ((uint16_t)f << 3) ^
+                          (f >> 4));
+    }
+    return seed;
 }
 
 /* ==================== MCUboot TLV keyhash 解析 ==================== */

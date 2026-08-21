@@ -9,7 +9,8 @@
  *     其余帧交业务回调 (现无注册者, 静默丢弃 + 计数)
  *   - 协议语义对齐: START 无条件重开会话 (重擦, 兼容上次失败残留)、
  *     keyhash 仅在 5 帧到齐时校验 (老上位机不发 0x104 放行)、
- *     CONFIRM 无 CRC (镜像完整性由 MCUboot 验签兜底)、REBOOT 不应答
+ *     CONFIRM 无 CRC (镜像完整性由 MCUboot 验签兜底)、REBOOT 不应答。
+ *     流控窗口 512B 对齐 Zephyr CAN_FW_OFFSET_REPLY_BYTES。
  */
 
 #include <stdio.h>
@@ -61,7 +62,7 @@ enum {
 #define KEYHASH_FULL_MASK ((1u << KEYHASH_CHUNKS) - 1u)
 
 #define FW_Q_DEPTH 32u
-#define ACK_INTERVAL 64u /* 每 64B 回一次 OFFSET (流控窗口 8 帧) */
+#define ACK_INTERVAL 512u /* 对齐 Zephyr CAN_FW_OFFSET_REPLY_BYTES */
 
 struct can_fw_msg {
     uint32_t id;
@@ -172,6 +173,11 @@ static void handle_platform_rx(const uint8_t *data, uint8_t dlc)
             LOG_WRN("fwcan: confirm before start");
             fw_reply(FW_CODE_TRANSFER_ERROR, 0);
             return;
+        }
+        {
+            struct can_fw_msg stale;
+            while (xQueueReceive(fw_q, &stale, 0) == pdTRUE) {
+            }
         }
         if (fw_upg_finish_ex(0, false) != 0) {
             LOG_WRN("fwcan: confirm verify failed");

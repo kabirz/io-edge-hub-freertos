@@ -16,6 +16,8 @@ import struct
 import sys
 import time
 
+from tqdm import tqdm
+
 UDP_PORT = 8600
 CHUNK = 511
 START_TMO = 20.0
@@ -26,11 +28,9 @@ def crc16_ccitt(data):
     """Zephyr sys/crc.h crc16_ccitt(0, data) -- reflected, poly 0x1021."""
     seed = 0
     for b in data:
-        seed = (seed >> 8 | seed << 8) & 0xFFFF
-        seed ^= b
-        seed ^= (seed & 0xFF) >> 4
-        seed = (seed << 12) & 0xFFFF ^ seed
-        seed = ((seed & 0xFF) << 5) & 0xFFFF ^ seed
+        e = (seed ^ b) & 0xFF
+        f = (e ^ (e << 4)) & 0xFF
+        seed = ((seed >> 8) ^ (f << 8) ^ (f << 3) ^ (f >> 4)) & 0xFFFF
     return seed
 
 
@@ -125,17 +125,16 @@ def main():
 def send_legacy(u, img):
     """0x02 停等 (兼容老固件): 每块等应答。返回已确认字节数。"""
     off = 0
-    t0 = time.time()
-    while off < len(img):
-        n = min(CHUNK, len(img) - off)
-        r = u.xfer(bytes([0x02]) + img[off:off + n])
-        got = struct.unpack('<I', r[1:5])[0]
-        if got != off + n:
-            sys.exit('data NAK at %d (device has %d)' % (off + n, got))
-        off += n
-        if off % (CHUNK * 100) == 0 or off == len(img):
-            print('  %d/%d (%.0f KB/s)' % (off, len(img),
-                  off / 1024 / max(time.time() - t0, 1e-3)))
+    with tqdm(total=len(img), unit='B', unit_scale=True,
+              unit_divisor=1024, desc='legacy') as bar:
+        while off < len(img):
+            n = min(CHUNK, len(img) - off)
+            r = u.xfer(bytes([0x02]) + img[off:off + n])
+            got = struct.unpack('<I', r[1:5])[0]
+            if got != off + n:
+                sys.exit('data NAK at %d (device has %d)' % (off + n, got))
+            off += n
+            bar.update(n)
     return off
 
 
@@ -150,44 +149,43 @@ def send_v2(u, img, chunk):
     total = len(img)
     off = 0
     retries = 0
-    t0 = time.time()
-    while off < total:
-        win_end = min(off + V2_WINDOW * chunk, total)
-        w = off
-        while w < win_end:
-            n = min(chunk, total - w)
-            u.s.sendto(bytes([0x06]) + struct.pack('<I', w) +
-                       img[w:w + n], u.dst)
-            w += n
+    with tqdm(total=total, unit='B', unit_scale=True,
+              unit_divisor=1024, desc='v2') as bar:
+        while off < total:
+            win_end = min(off + V2_WINDOW * chunk, total)
+            w = off
+            while w < win_end:
+                n = min(chunk, total - w)
+                u.s.sendto(bytes([0x06]) + struct.pack('<I', w) +
+                           img[w:w + n], u.dst)
+                w += n
 
-        deadline = time.time() + V2_ACK_TMO
-        confirmed = off
-        while confirmed < win_end:
-            remain = deadline - time.time()
-            if remain <= 0:
-                break
-            try:
-                u.s.settimeout(remain)
-                r, _ = u.s.recvfrom(64)
-            except socket.timeout:
-                break
-            if len(r) >= 5 and r[0] == 0x06:
-                roff = struct.unpack('<I', r[1:5])[0]
-                if roff > confirmed:
-                    confirmed = min(roff, total)
-                    retries = 0
-                    if confirmed % (chunk * 32) < chunk or confirmed == total:
-                        print('  %d/%d (%.0f KB/s)' %
-                              (confirmed, total,
-                               confirmed / 1024 / max(time.time() - t0, 1e-3)))
+            deadline = time.time() + V2_ACK_TMO
+            confirmed = off
+            while confirmed < win_end:
+                remain = deadline - time.time()
+                if remain <= 0:
+                    break
+                try:
+                    u.s.settimeout(remain)
+                    r, _ = u.s.recvfrom(64)
+                except socket.timeout:
+                    break
+                if len(r) >= 5 and r[0] == 0x06:
+                    roff = struct.unpack('<I', r[1:5])[0]
+                    if roff > confirmed:
+                        delta = roff - confirmed
+                        confirmed = min(roff, total)
+                        bar.update(delta)
+                        retries = 0
 
-        if confirmed >= win_end:
+            if confirmed >= win_end:
+                off = confirmed
+                continue
+            retries += 1
+            if retries > V2_MAX_RETRIES:
+                sys.exit('V2 window stalled at %d (device stuck?)' % confirmed)
             off = confirmed
-            continue
-        retries += 1
-        if retries > V2_MAX_RETRIES:
-            sys.exit('V2 window stalled at %d (device stuck?)' % confirmed)
-        off = confirmed
     return off
 
 

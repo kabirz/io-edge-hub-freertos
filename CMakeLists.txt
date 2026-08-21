@@ -4,6 +4,20 @@ cmake_minimum_required(VERSION 3.16)
 # 被引用; log.c 仍编译 -- log_init/_write 保持链接可用)。默认 OFF。
 option(APP_RELEASE "Disable logging for release" OFF)
 
+# ---- 子模块自动初始化 (首次 cmake 配置时执行) ----
+if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/deps/FreeRTOS-Kernel/include/FreeRTOS.h)
+    message(STATUS "初始化 git 子模块...")
+    execute_process(COMMAND git submodule update --init
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} RESULT_VARIABLE _sm_rc)
+    if(_sm_rc EQUAL 0)
+        execute_process(COMMAND git -C deps/STM32CubeF4 submodule update --init
+            Drivers/STM32F4xx_HAL_Driver Drivers/CMSIS/Device/ST/STM32F4xx
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        execute_process(COMMAND git -C deps/mcuboot submodule update --init ext/mbedtls
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    endif()
+endif()
+
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" ver_file)
 string(REGEX MATCH "VERSION_MAJOR = ([0-9]+)" _ ${ver_file})
 set(FW_VERSION_MAJOR ${CMAKE_MATCH_1})
@@ -19,6 +33,17 @@ if(NOT FW_GIT_VERSION)
   set(FW_GIT_VERSION "000000")
 endif()
 configure_file(src/fw_version.h.in ${CMAKE_BINARY_DIR}/generated/fw_version.h @ONLY)
+
+# ---- 默认路径 (无需 -D 指定) ----
+set(CMAKE_TOOLCHAIN_FILE
+    ${CMAKE_CURRENT_SOURCE_DIR}/deps/stm32-cmake/cmake/stm32_gcc.cmake
+    CACHE FILEPATH "stm32-cmake toolchain file")
+set(STM32_CUBE_F4_PATH
+    ${CMAKE_CURRENT_SOURCE_DIR}/deps/STM32CubeF4
+    CACHE PATH "STM32CubeF4 path")
+set(FREERTOS_PATH
+    ${CMAKE_CURRENT_SOURCE_DIR}/deps/FreeRTOS-Kernel
+    CACHE PATH "FreeRTOS kernel path")
 
 project(io-edge-hub-freertos C CXX ASM)
 set(CMAKE_C_STANDARD 11)
@@ -304,8 +329,107 @@ target_link_libraries(fw.elf PRIVATE
 )
 stm32_print_size_of_target(fw.elf)
 stm32_generate_hex_file(fw.elf)
+stm32_generate_binary_file(fw.elf)
+
+# ==================== 签名 + full 镜像生成 ====================
+# imgtool 签名: fw.bin -> fw.signed.bin (MCUboot RSA-2048)
+set(FW_KEY_PEM ${CMAKE_CURRENT_SOURCE_DIR}/tools/keys/root-rsa2048.pem)
+set(FW_VERSION "${FW_VERSION_MAJOR}.${FW_VERSION_MINOR}.${FW_VERSION_PATCH}")
+set(FW_SIGNED_BIN ${CMAKE_CURRENT_BINARY_DIR}/fw.signed.bin)
+set(FULL_BIN ${CMAKE_CURRENT_BINARY_DIR}/full.bin)
+set(FULL_HEX ${CMAKE_CURRENT_BINARY_DIR}/full.hex)
 
 # ==================== boot 引导镜像 (MCUboot 域, 裸机无 RTOS) ====================
+# imgtool 可执行路径 (优先 PATH, 其次 python -m imgtool)
+find_program(IMGTOOL imgtool)
+if(NOT IMGTOOL)
+    set(IMGTOOL ${Python3_EXECUTABLE} -m imgtool)
+endif()
+
+add_custom_command(
+    OUTPUT ${FW_SIGNED_BIN}
+    COMMAND ${IMGTOOL} sign
+            ${CMAKE_CURRENT_BINARY_DIR}/fw.bin
+            ${FW_SIGNED_BIN}
+            --key ${FW_KEY_PEM}
+            --header-size 512 --pad-header
+            --align 8 --version ${FW_VERSION}
+            --slot-size 0x70000 --max-sectors 120
+            --erased-val 0xff
+    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/fw.bin ${FW_KEY_PEM}
+    COMMENT "imgtool sign -> fw.signed.bin"
+)
+
+# full.bin = boot.bin + 0xFF 填充到 0x10000 + fw.signed.bin
+add_custom_command(
+    OUTPUT ${FULL_BIN}
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/merge_image.py
+            ${CMAKE_CURRENT_BINARY_DIR}/boot.bin
+            ${FW_SIGNED_BIN} 65536 ${FULL_BIN}
+    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/boot.bin ${FW_SIGNED_BIN}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/merge_image.py
+    COMMENT "merge boot + padding + signed app -> full.bin"
+)
+
+add_custom_command(
+    OUTPUT ${FULL_HEX}
+    COMMAND ${CMAKE_OBJCOPY} -I binary -O ihex
+            --change-addresses=0x8000000
+            ${FULL_BIN} ${FULL_HEX}
+    DEPENDS ${FULL_BIN}
+    COMMENT "objcopy -> full.hex"
+)
+
+add_custom_target(fw_sign ALL DEPENDS ${FW_SIGNED_BIN} ${FULL_HEX})
+
+# ==================== 烧录目标 ====================
+find_program(STFLASH st-flash)
+find_program(STLINK_CLI ST-LINK_CLI)
+find_program(PYOCD pyocd)
+
+if(STFLASH)
+    add_custom_target(flash
+        COMMAND ${STFLASH} --reset write ${FULL_BIN} 0x8000000
+        DEPENDS fw_sign
+        USES_TERMINAL
+        COMMENT "st-flash write full.bin -> 0x08000000"
+    )
+endif()
+
+if(STLINK_CLI)
+    add_custom_target(stlink_flash
+        COMMAND ${STLINK_CLI} -c SWD SWCLK=4000 -P ${FULL_HEX} -V -Rst
+        COMMAND ${STLINK_CLI} -c SWD SWCLK=4000 -Rst
+        DEPENDS fw_sign
+        USES_TERMINAL
+        COMMENT "ST-LINK_CLI flash full.hex"
+    )
+endif()
+
+if(PYOCD)
+    add_custom_target(pyocd_flash
+        COMMAND ${PYOCD} flash -t stm32f407vetx ${FULL_HEX}
+        DEPENDS fw_sign
+        USES_TERMINAL
+        COMMENT "pyocd flash full.hex"
+    )
+    add_custom_target(pyocd_reset
+        COMMAND ${PYOCD} reset -t stm32f407vetx
+        COMMENT "pyocd reset"
+    )
+endif()
+
+set(BOOT_KEYS_C ${CMAKE_CURRENT_BINARY_DIR}/generated/boot_keys.c)
+add_custom_command(
+    OUTPUT ${BOOT_KEYS_C}
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_boot_keys.py
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/keys/root-rsa2048.pem
+            ${BOOT_KEYS_C}
+    DEPENDS tools/gen_boot_keys.py tools/keys/root-rsa2048.pem
+    COMMENT "pem -> boot_keys.c"
+)
 
 # MCUboot bootutil (deps/mcuboot @v2.1.0) + mbedTLS 3.0 (RSA 验签子集)
 set(MBEDTLS_DIR ${MCUBOOT_DIR}/ext/mbedtls)
@@ -320,7 +444,6 @@ set(BOOT_SOURCES
     src/storage/w25qxx.c
     src/storage/intflash.c
     ${BOOT_PORT_DIR}/flash_map_backend.c
-    ${BOOT_PORT_DIR}/keys.c
     ${BOOTUTIL_DIR}/src/bootutil_misc.c
     ${BOOTUTIL_DIR}/src/bootutil_public.c
     ${BOOTUTIL_DIR}/src/caps.c
@@ -342,7 +465,8 @@ set(BOOT_SOURCES
     ${MBEDTLS_DIR}/library/memory_buffer_alloc.c
     ${STM32_STARTUP_S}
     ${STM32_SYSTEM_C}
-    ${FW_KEYHASH_H} # boot_can.c include; 声明生成顺序依赖
+    ${BOOT_KEYS_C}
+    ${FW_KEYHASH_H}
     stm32f4xx_hal_conf.h
 )
 add_executable(boot.elf ${BOOT_SOURCES})
@@ -354,8 +478,6 @@ target_include_directories(boot.elf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/boot
     ${CMAKE_CURRENT_SOURCE_DIR}/src/include
     ${CMAKE_BINARY_DIR}/generated
-    # 移植层目录形状 (mcuboot_config/ sysflash/ flash_map_backend/ os/)
-    # 与 bootutil include 形状对接; mbedtls_conf 覆盖默认 mbedtls_config
     ${BOOT_PORT_DIR}
     ${BOOT_PORT_DIR}/mbedtls_conf
     ${BOOTUTIL_DIR}/include
@@ -402,3 +524,4 @@ target_link_libraries(boot.elf PRIVATE
 gen_ld_script(boot.elf boot 0x8000000 64K)
 stm32_print_size_of_target(boot.elf)
 stm32_generate_hex_file(boot.elf)
+stm32_generate_binary_file(boot.elf)

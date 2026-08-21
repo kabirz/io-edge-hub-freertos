@@ -70,7 +70,7 @@ enum {
 #define PROBE_TIMEOUT_MS 500u
 #define PROBE_INTERVAL_MS 200u
 #define IDLE_TIMEOUT_MS 15000u
-#define ACK_INTERVAL 64u
+#define ACK_INTERVAL 512u /* 对齐 Zephyr CAN_FW_OFFSET_REPLY_BYTES */
 
 /* ==================== 会话状态 ==================== */
 
@@ -383,6 +383,13 @@ static void handle_cmd(const uint8_t *data, uint8_t dlc)
         if (!s.active) {
             fw_reply(FW_CODE_TRANSFER_ERROR, 0);
             return;
+        }
+        /* 排空残留数据帧, 避免旧 OFFSET 回复污染 CONFIRM 应答 */
+        {
+            uint32_t drop_id;
+            uint8_t drop_data[8];
+            while (can_recv(&drop_id, drop_data) != 0u) {
+            }
         }
         s.active = false;
         if (s.written != s.total) {
