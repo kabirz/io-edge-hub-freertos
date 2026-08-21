@@ -2,14 +2,14 @@
 #define CONFIG_STORE_H
 
 #include <stdint.h>
+#include "flash_layout.h"
 #include "io_flash.h"
 
-/* NOR layout (16 MiB W25Q128): two config slots then littlefs. */
-#define CFG_SLOT_A    0x100000u
-#define CFG_SLOT_B    0x108000u
+/* config 双槽落在 storage 分区 (与 Zephyr 版 FCB settings 同区),
+ * littlefs 分区紧随其后; 完整分区表见 flash_layout.h */
+#define CFG_SLOT_A    STORAGE_OFFSET
+#define CFG_SLOT_B    (STORAGE_OFFSET + CFG_SLOT_SIZE)
 #define CFG_SLOT_SIZE 0x8000u
-#define LFS_OFFSET    0x110000u
-#define LFS_SIZE      (0x1000000u - 0x110000u)
 
 /*
  * The 10 persisted configuration keys (one-to-one with the Zephyr

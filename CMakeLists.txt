@@ -28,6 +28,31 @@ find_package(CMSIS COMPONENTS STM32F4 REQUIRED)
 find_package(HAL COMPONENTS STM32F4 REQUIRED)
 find_package(FreeRTOS COMPONENTS ARM_CM4F REQUIRED)
 
+# ---- 双镜像 flash 布局 (与 Zephyr io-edge-hub 板级分区一致,
+# src/include/flash_layout.h): boot @0x08000000/64K + app(slot0)
+# @0x08010000/448K。链接脚本用 stm32-cmake 官方模板按 target 生成;
+# 可执行目标不链 CMSIS::STM32::F407VE (该 interface 自动注入整片
+# 512K 默认 .ld), startup/system 源与 -T 由各 target 显式指定。
+function(gen_ld_script TARGET NAME FLASH_ORIGIN FLASH_SIZE)
+    set(LD_OUT "${CMAKE_BINARY_DIR}/${NAME}.ld")
+    add_custom_command(
+        OUTPUT "${LD_OUT}"
+        COMMAND ${CMAKE_COMMAND}
+            -DFLASH_ORIGIN="${FLASH_ORIGIN}" -DRAM_ORIGIN="0x20000000"
+            -DCCRAM_ORIGIN="0x10000000" -DRAM_SHARE_ORIGIN="0x20030000"
+            -DFLASH_SIZE="${FLASH_SIZE}" -DRAM_SIZE="128K" -DCCRAM_SIZE="64K"
+            -DRAM_SHARE_SIZE="" -DSTACK_SIZE="0x400" -DHEAP_SIZE="0x200"
+            -DLINKER_SCRIPT="${LD_OUT}" -DFORCE_READONLY_SECTIONS="TRUE"
+            -P "${STM32_CMAKE_DIR}/stm32/linker_ld.cmake")
+    add_custom_target(gen_${NAME}_ld DEPENDS "${LD_OUT}")
+    add_dependencies(${TARGET} gen_${NAME}_ld)
+    stm32_add_linker_script(${TARGET} PRIVATE "${LD_OUT}")
+endfunction()
+
+set(CMSIS_DEV_DIR ${STM32_CUBE_F4_PATH}/Drivers/CMSIS/Device/ST/STM32F4xx)
+set(STM32_STARTUP_S ${CMSIS_DEV_DIR}/Source/Templates/gcc/startup_stm32f407xx.s)
+set(STM32_SYSTEM_C ${CMSIS_DEV_DIR}/Source/Templates/system_stm32f4xx.c)
+
 set(APP_SOURCES
     src/main.c
     src/board/board.c
@@ -67,6 +92,8 @@ set(APP_SOURCES
     deps/ioLibrary/Ethernet/wizchip_conf.c
     deps/ioLibrary/Ethernet/W5500/w5500.c
     deps/ioLibrary/Ethernet/socket.c
+    ${STM32_STARTUP_S}
+    ${STM32_SYSTEM_C}
 )
 # Web SPA: gzip 为 C 数组头 (确定性输出 mtime=0)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -146,6 +173,13 @@ target_compile_definitions(fw.elf PRIVATE
 if(APP_RELEASE)
     target_compile_definitions(fw.elf PRIVATE LOG_ENABLE=0)
 endif()
+# app 固件位于 slot0 (@0x08010000): SystemInit 必须按偏移重设 VTOR
+# (system_stm32f4xx.c 默认写 FLASH_BASE=0x08000000, 会指回 boot)
+target_compile_definitions(fw.elf PRIVATE
+    USER_VECT_TAB_ADDRESS
+    VECT_TAB_OFFSET=0x10000U
+)
+gen_ld_script(fw.elf fw 0x8010000 448K)
 # ioLibrary 上游不按本项目 -Wall -Wextra 级别维护, 仅这些文件关警告
 # (GCC 用 -w 全关, 排在 -Wall -Wextra 之后生效)
 set_source_files_properties(
@@ -224,8 +258,47 @@ target_link_libraries(fw.elf PRIVATE
     HAL::STM32::F4::TIM
     HAL::STM32::F4::TIMEx
     HAL::STM32::F4::PWR
-    CMSIS::STM32::F407VE
+    STM32::F407xx
     STM32::NoSys
 )
 stm32_print_size_of_target(fw.elf)
 stm32_generate_hex_file(fw.elf)
+
+# ==================== boot 引导镜像 (MCUboot 域, 裸机无 RTOS) ====================
+
+add_executable(boot.elf
+    src/boot/boot.c
+    src/boot/boot_uart.c
+    src/board/board.c
+    src/board/spi.c
+    src/board/stm32f4xx_hal_timebase_tim.c
+    src/storage/w25qxx.c
+    src/storage/intflash.c
+    ${STM32_STARTUP_S}
+    ${STM32_SYSTEM_C}
+    stm32f4xx_hal_conf.h
+)
+set_target_properties(boot.elf PROPERTIES OUTPUT_NAME boot)
+
+target_include_directories(boot.elf PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/board
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+    ${CMAKE_BINARY_DIR}/generated
+)
+target_compile_options(boot.elf PRIVATE -Wall -Wextra -Os)
+target_link_libraries(boot.elf PRIVATE
+    HAL::STM32::F4::RCC
+    HAL::STM32::F4::GPIO
+    HAL::STM32::F4::CORTEX
+    HAL::STM32::F4::UART
+    HAL::STM32::F4::SPI
+    HAL::STM32::F4::TIM
+    HAL::STM32::F4::TIMEx # HAL_TIM_IRQHandler 引用 TIMEx 弱回调
+    HAL::STM32::F4::FLASH
+    STM32::F407xx
+    STM32::NoSys
+)
+gen_ld_script(boot.elf boot 0x8000000 64K)
+stm32_print_size_of_target(boot.elf)
+stm32_generate_hex_file(boot.elf)

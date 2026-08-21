@@ -1,8 +1,8 @@
 #include "fake_flash.h"
 #include <string.h>
 
-#define FAKE_BASE   0x100000u   /* NOR offset covered by the fake */
-#define FAKE_SIZE   0x100000u   /* 1 MiB: slots A/B (0x10000) + littlefs */
+#define FAKE_BASE   0x0E0000u   /* NOR offset covered by the fake */
+#define FAKE_SIZE   0x100000u   /* 1 MiB: storage 分区 (64K) + littlefs 头部窗口 */
 #define NOR_PAGE    256u
 #define NOR_SECTOR  4096u
 
