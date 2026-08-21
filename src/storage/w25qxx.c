@@ -40,6 +40,19 @@
 static void cs_low(void)  { HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET); }
 static void cs_high(void) { HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET); }
 
+/* 总线互斥 (app 注入; boot 单线程为空) */
+static void (*bus_lock)(void);
+static void (*bus_unlock)(void);
+
+void w25qxx_set_bus_lock(void (*lock)(void), void (*unlock)(void))
+{
+    bus_lock = lock;
+    bus_unlock = unlock;
+}
+
+static void bus_take(void)  { if (bus_lock) bus_lock(); }
+static void bus_give(void)  { if (bus_unlock) bus_unlock(); }
+
 static int spi_tx(const uint8_t *d, uint16_t n)
 {
     return HAL_SPI_Transmit(&hspi1, (uint8_t *)d, n, W25Q_TMO_XFER_MS) == HAL_OK ? 0 : -1;
@@ -85,36 +98,47 @@ static int wait_not_busy(uint32_t timeout_ms)
 
 static int w25_read(uint32_t addr, uint8_t *buf, uint32_t len)
 {
+    int rc;
+
     if (len == 0) return 0;
     if (addr >= W25Q_CHIP_SIZE || W25Q_CHIP_SIZE - addr < len || buf == 0) return -1;
+    bus_take();
     while (len > 0) {
         uint32_t chunk = len > 0xFFFFu ? 0xFFFFu : len;   /* HAL 单次 <= 65535 */
         cs_low();
-        if (spi_cmd_addr(W25Q_CMD_READ_DATA, addr) != 0) { cs_high(); return -1; }
-        if (spi_rx(buf, (uint16_t)chunk) != 0)            { cs_high(); return -1; }
+        if (spi_cmd_addr(W25Q_CMD_READ_DATA, addr) != 0) { cs_high(); bus_give(); return -1; }
+        if (spi_rx(buf, (uint16_t)chunk) != 0)            { cs_high(); bus_give(); return -1; }
         cs_high();
         addr += chunk;
         buf += chunk;
         len -= chunk;
     }
-    return 0;
+    rc = 0;
+    bus_give();
+    return rc;
 }
 
 static int w25_write(uint32_t addr, const uint8_t *buf, uint32_t len)
 {
+    int rc;
+
     if (len == 0) return 0;
     if (len > W25Q_PAGE_SIZE) return -1;                       /* io_flash 约束 */
     if ((addr % W25Q_PAGE_SIZE) + len > W25Q_PAGE_SIZE) return -1; /* 不跨页 */
     if (addr >= W25Q_CHIP_SIZE || W25Q_CHIP_SIZE - addr < len || buf == 0) return -1;
-    if (wren() != 0) return -1;
+    bus_take();
+    if (wren() != 0) { bus_give(); return -1; }
     cs_low();
     if (spi_cmd_addr(W25Q_CMD_PAGE_PROG, addr) != 0 ||
         spi_tx(buf, (uint16_t)len) != 0) {
         cs_high();
+        bus_give();
         return -1;
     }
     cs_high();
-    return wait_not_busy(W25Q_TMO_PROG);
+    rc = wait_not_busy(W25Q_TMO_PROG);
+    bus_give();
+    return rc;
 }
 
 static int erase_one(uint32_t addr, uint8_t cmd, uint32_t timeout_ms)
@@ -128,10 +152,13 @@ static int erase_one(uint32_t addr, uint8_t cmd, uint32_t timeout_ms)
 
 static int w25_erase(uint32_t addr, uint32_t len)
 {
+    int rc;
+
     if (len == 0 || addr % W25Q_SECTOR_SIZE != 0 || len % W25Q_SECTOR_SIZE != 0)
         return -1;
     if (addr >= W25Q_CHIP_SIZE || W25Q_CHIP_SIZE - addr < len) return -1;
 
+    bus_take();
     watchdog_feed();   /* 入口喂一次: littlefs 每块回调, 全片格式化分钟级 */
     while (len > 0) {
         uint32_t chunk, tmo;
@@ -143,12 +170,14 @@ static int w25_erase(uint32_t addr, uint32_t len)
         } else {                                               /* 4 KiB 兜底 */
             chunk = 0x1000u;  cmd = W25Q_CMD_SECTOR_ER; tmo = W25Q_TMO_4K;
         }
-        if (erase_one(addr, cmd, tmo) != 0) return -1;
+        if (erase_one(addr, cmd, tmo) != 0) { bus_give(); return -1; }
         addr += chunk;
         len -= chunk;
     }
     watchdog_feed();
-    return 0;
+    rc = 0;
+    bus_give();
+    return rc;
 }
 
 static const struct io_flash w25_backend = { w25_read, w25_erase, w25_write };

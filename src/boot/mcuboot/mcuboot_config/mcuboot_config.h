@@ -31,8 +31,10 @@
 /* 新版扇区 API (mbed 移植同款) */
 #define MCUBOOT_USE_FLASH_AREA_GET_SECTORS
 
-/* 日志关闭 (BOOT_LOG_* 编译为空); boot 侧仅保留自有 boot_log */
-/* #define MCUBOOT_HAVE_LOGGING */
+/* 日志/断言映射到 boot_log: SWAP 全程可见, assert 失败报行号
+ * (newlib 默认 assert -> abort -> 无声死循环, 排障不可接受) */
+#define MCUBOOT_HAVE_LOGGING
+#define MCUBOOT_HAVE_ASSERT_H
 
 /* FIH 默认 OFF (fault_injection_hardening.h 缺省) */
 

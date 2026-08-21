@@ -78,6 +78,10 @@ io_test(test_udp_cfg test_udp_cfg.c fake_flash.c
 # tests/fw_version.h provides all version defines (FW_VERSION_MAJOR/MINOR/PATCH
 # and FW_GIT_VERSION as a proper string literal).
 
+# fw_upg: 固件升级核心 (页缓冲写/CRC16 读回校验/TLV keyhash 解析/会话状态机)。
+# w25qxx_flash() 由测试提供 (指向 fake), 测试镜像与 imgtool 产物同构。
+io_test(test_fw_upg test_fw_upg.c fake_flash.c ${SRC}/fw/fw_upg.c)
+
 # sys/time: ts_in_range 纯函数边界 (HAL/RTC 部分经 HOST_TEST 分离,
 # 不参与 host 编译; set_timestamp/io_time_init 为 target-only 构建验证)
 io_test(test_sys_time test_sys_time.c ${SRC}/sys/time.c)

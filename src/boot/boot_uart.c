@@ -95,6 +95,10 @@ void boot_log(const char *fmt, ...)
         while (*fmt >= '0' && *fmt <= '9') {
             pad = (uint8_t)(pad * 10u + (uint8_t)(*fmt++ - '0'));
         }
+        /* 长度修饰 (l/z/h): ARM32 ILP32 下等宽, 跳过后按默认取参 */
+        while (*fmt == 'l' || *fmt == 'z' || *fmt == 'h') {
+            fmt++;
+        }
         switch (*fmt) {
         case 's':
             put_str(&p, end, va_arg(ap, const char *));

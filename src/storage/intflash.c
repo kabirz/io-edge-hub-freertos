@@ -10,6 +10,14 @@
 
 #include "main.h"
 
+#ifdef BOOT_DOMAIN
+#include "boot_uart.h"
+#define INTFLASH_LOG(fmt, ...) boot_log(fmt, ##__VA_ARGS__)
+#else
+#include "log.h"
+#define INTFLASH_LOG(fmt, ...) LOG_ERR(fmt, ##__VA_ARGS__)
+#endif
+
 #include "intflash.h"
 #include "io_watchdog.h"
 
@@ -41,10 +49,13 @@ int intflash_erase(uint32_t addr, uint32_t len)
     len = (len + 0xFFFu) & ~0xFFFu; /* 调用方按镜像大小传入, 4KB 对齐 */
     end = addr + len;
     if (addr < f4_sector_tab[0].addr || end > 0x08080000u) {
+        INTFLASH_LOG("intflash: erase range %08x +%x out of bounds",
+                     (unsigned)addr, (unsigned)len);
         return -1;
     }
 
     if (HAL_FLASH_Unlock() != HAL_OK) {
+        INTFLASH_LOG("intflash: HAL_FLASH_Unlock failed");
         return -1;
     }
     for (uint32_t i = 0; i < F4_SECTOR_N; i++) {
@@ -62,9 +73,16 @@ int intflash_erase(uint32_t addr, uint32_t len)
             .VoltageRange = FLASH_VOLTAGE_RANGE_3, /* 2.7-3.6V, x32 并行 */
         };
         uint32_t err = 0;
+        HAL_StatusTypeDef r;
 
         watchdog_feed();
-        if (HAL_FLASHEx_Erase(&e, &err) != HAL_OK || err != 0) {
+        r = HAL_FLASHEx_Erase(&e, &err);
+        if (r != HAL_OK) {
+            /* SectorError 仅在失败时有意义 (成功哨兵 0xFFFFFFFF) */
+            INTFLASH_LOG("intflash: erase sec%u %08x hal=%d err=%x sr=%x",
+                         (unsigned)f4_sector_tab[i].sector,
+                         (unsigned)s_addr, (int)r, (unsigned)err,
+                         (unsigned)(FLASH->SR & 0xF3F0u));
             (void)HAL_FLASH_Lock();
             return -1;
         }

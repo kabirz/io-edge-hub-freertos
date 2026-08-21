@@ -1,11 +1,12 @@
 #include "fake_flash.h"
 #include <string.h>
 
-#define FAKE_BASE   0x0E0000u   /* NOR offset covered by the fake */
-#define FAKE_SIZE   0x100000u   /* 1 MiB: storage 分区 (64K) + littlefs 头部窗口 */
+#define FAKE_BASE   0x000000u   /* 全片 16 MiB: slot1 (0x0) + storage + littlefs */
+#define FAKE_SIZE   0x1000000u
 #define NOR_PAGE    256u
 #define NOR_SECTOR  4096u
 
+/* 16 MiB RAM fake (host 内存充裕; slot1 升级测试需覆盖 0x0 起) */
 static uint8_t mem[FAKE_SIZE];
 
 static int in_range(uint32_t addr, uint32_t len)

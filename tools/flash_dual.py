@@ -51,6 +51,8 @@ def main():
                   '-V', '-Rst'])
         if rc != 0:
             sys.exit(1)
+        # -P 后的 -Rst 实测未放行核心 (COM9 无输出), 补一次独立复位
+        run(['-c', 'SWD', 'SWCLK=4000', '-Rst'])
         t.join(timeout=30)
         print(f"\n=== COM9: {len(collected)} bytes ===")
         data = collected.decode('ascii', errors='replace')
@@ -64,6 +66,7 @@ def main():
     rc = run(['-c', 'SWD', 'SWCLK=4000', '-P', BUILD + r'\fw.hex', '-V', '-Rst'])
     if rc != 0:
         sys.exit(1)
+    run(['-c', 'SWD', 'SWCLK=4000', '-Rst'])
 
     t.join(timeout=30)
     print(f"\n=== COM9: {len(collected)} bytes ===")

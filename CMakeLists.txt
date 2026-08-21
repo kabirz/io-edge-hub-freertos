@@ -109,6 +109,32 @@ add_custom_command(
 )
 # 生成头列入目标源: 编译前自动执行 custom command
 list(APPEND APP_SOURCES ${WEB_INDEX_GZ_H})
+
+# 固件升级: fw 核心/UDP 通道 + bootutil_public (boot_set_pending 写
+# slot1 trailer) + 共用 flash_map_backend (slot1 经 W25Q)
+set(MCUBOOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/deps/mcuboot)
+set(BOOTUTIL_DIR ${MCUBOOT_DIR}/boot/bootutil)
+set(BOOT_PORT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/boot/mcuboot)
+list(APPEND APP_SOURCES
+    src/fw/fw_upg.c
+    src/fw/fw_udp.c
+    src/storage/intflash.c
+    ${BOOT_PORT_DIR}/flash_map_backend.c
+    ${BOOTUTIL_DIR}/src/bootutil_public.c
+)
+# keyhash 头 (SHA256(RSA pub DER), 与镜像 TLV KEYHASH 一致)
+set(FW_KEYHASH_H ${CMAKE_CURRENT_BINARY_DIR}/generated/fw_keyhash.h)
+add_custom_command(
+    OUTPUT ${FW_KEYHASH_H}
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_keyhash.py
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/keys/root-rsa2048.pem
+            ${FW_KEYHASH_H}
+    DEPENDS tools/gen_keyhash.py
+    COMMENT "pem -> fw_keyhash.h"
+)
+list(APPEND APP_SOURCES ${FW_KEYHASH_H})
+
 # LwIP 2.1.3 core sources (FreeRTOS + NO_SYS=0 mode)
 set(LWIP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/deps/lwip)
 list(APPEND APP_SOURCES
@@ -152,6 +178,8 @@ set(APP_INCLUDES
     # 未限定 "w5500.h" 一律解析到 src/include (本模块对外头)。
     ${CMAKE_CURRENT_SOURCE_DIR}/deps/ioLibrary/Ethernet
 )
+# 固件升级 (fw_upg/fw_udp + bootutil_public) 的移植层头路径
+list(APPEND APP_INCLUDES ${BOOT_PORT_DIR} ${BOOTUTIL_DIR}/include)
 
 add_executable(fw.elf ${APP_SOURCES} stm32f4xx_hal_conf.h)
 # CMAKE_EXECUTABLE_SUFFIX is ".elf" (stm32_gcc.cmake); OUTPUT_NAME keeps target
@@ -241,6 +269,14 @@ set_source_files_properties(
 set_source_files_properties(
     src/storage/lfs_port.c
     PROPERTIES COMPILE_DEFINITIONS "LFS_HEAP_FW")
+# 固件升级: 核心启用 FreeRTOS 锁; 上游文件关警告
+set_source_files_properties(
+    src/fw/fw_upg.c
+    PROPERTIES COMPILE_DEFINITIONS "FW_UPG_FW")
+set_source_files_properties(
+    ${BOOT_PORT_DIR}/flash_map_backend.c
+    ${BOOTUTIL_DIR}/src/bootutil_public.c
+    PROPERTIES COMPILE_OPTIONS "-w")
 target_link_libraries(fw.elf PRIVATE
     FreeRTOS::ARM_CM4F
     FreeRTOS::Heap::4
@@ -259,6 +295,8 @@ target_link_libraries(fw.elf PRIVATE
     HAL::STM32::F4::TIM
     HAL::STM32::F4::TIMEx
     HAL::STM32::F4::PWR
+    HAL::STM32::F4::FLASH   # intflash (flash_map_backend slot0 路径)
+    HAL::STM32::F4::FLASHEx
     STM32::F407xx
     STM32::NoSys
 )
@@ -268,10 +306,7 @@ stm32_generate_hex_file(fw.elf)
 # ==================== boot 引导镜像 (MCUboot 域, 裸机无 RTOS) ====================
 
 # MCUboot bootutil (deps/mcuboot @v2.1.0) + mbedTLS 3.0 (RSA 验签子集)
-set(MCUBOOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/deps/mcuboot)
 set(MBEDTLS_DIR ${MCUBOOT_DIR}/ext/mbedtls)
-set(BOOTUTIL_DIR ${MCUBOOT_DIR}/boot/bootutil)
-set(BOOT_PORT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/boot/mcuboot)
 
 set(BOOT_SOURCES
     src/boot/boot.c
@@ -312,6 +347,7 @@ set_target_properties(boot.elf PROPERTIES OUTPUT_NAME boot)
 target_include_directories(boot.elf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/board
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/boot
     ${CMAKE_CURRENT_SOURCE_DIR}/src/include
     ${CMAKE_BINARY_DIR}/generated
     # 移植层目录形状 (mcuboot_config/ sysflash/ flash_map_backend/ os/)
@@ -322,6 +358,7 @@ target_include_directories(boot.elf PRIVATE
     ${MBEDTLS_DIR}/include
 )
 target_compile_options(boot.elf PRIVATE -Wall -Wextra -Os)
+target_compile_definitions(boot.elf PRIVATE BOOT_DOMAIN)
 # 上游代码不按本项目警告级别维护
 set_source_files_properties(
     ${BOOTUTIL_DIR}/src/bootutil_misc.c

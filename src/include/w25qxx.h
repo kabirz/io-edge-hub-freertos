@@ -22,6 +22,12 @@ int w25qxx_init(void);
  * erase 按 addr/len 对齐映射 4K/32K/64K 命令并轮询完成 (期间喂狗)。 */
 const struct io_flash *w25qxx_flash(void);
 
+/* SPI 总线互斥注入: littlefs (历史任务/web 读) 与固件升级写并发访问
+ * NOR, 一次 read/write/erase 必须整段独占总线 (含擦除完成轮询)。
+ * boot 域单线程, 不注入 (NULL)。app 在调度器启动后、首个 NOR 使用
+ * 前注入 FreeRTOS 互斥包装。 */
+void w25qxx_set_bus_lock(void (*lock)(void), void (*unlock)(void));
+
 #ifdef __cplusplus
 }
 #endif

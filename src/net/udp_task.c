@@ -16,6 +16,7 @@
 
 #include "w5500.h"
 #include "udp_cfg.h"
+#include "fw_udp.h"
 #include "init.h"
 #include "io_hooks.h"
 
@@ -29,6 +30,12 @@ volatile uint32_t udp_recv_calls;
 volatile uint32_t udp_recv_bytes;
 
 static struct udp_pcb *cfg_pcb;
+
+/* fw_udp.c 应答复用 (worker 经 tcpip_callback 回 tcpip 线程 sendto) */
+struct udp_pcb *fw_udp_cfg_pcb(void)
+{
+    return cfg_pcb;
+}
 
 /* FACTORY_RESET 两步确认计时源: tick -> ms */
 static uint32_t udp_now_ms_target(void)
@@ -52,9 +59,6 @@ static void udp_cfg_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
 {
     udp_recv_calls++;
     (void)arg;
-    (void)pcb;
-    (void)src_addr;
-    (void)src_port;
 
     if (p == NULL || p->tot_len == 0) {
         return;
@@ -73,11 +77,16 @@ static void udp_cfg_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         return;
     }
 
-    /* 提取完整 payload */
-    uint8_t rx[256];
+    /* 提取完整 payload (fw DATA 块最大 512B: cmd + 511B data) */
+    uint8_t rx[512];
     uint16_t copy_len = (p->tot_len < sizeof(rx)) ? p->tot_len : (uint16_t)sizeof(rx);
     pbuf_copy_partial(p, rx, copy_len, 0);
     pbuf_free(p);
+
+    /* 固件升级命令 0x01-0x03: 异步 worker 处理 + 异步应答 */
+    if (fw_udp_cmd(rx, copy_len, src_addr, src_port)) {
+        return;
+    }
 
     /* 处理命令 */
     uint8_t rep[64];

@@ -36,6 +36,16 @@ void watchdog_feed(void)
     IWDG->KR = 0xAAAAu;
 }
 
+/* MCUboot assert 失败出口 (默认 newlib abort() 无声死循环): 报行号
+ * (对应 bootutil 源文件, 单文件粒度足够定位) 后停机喂狗 */
+void mcuboot_assert_fail(int line)
+{
+    boot_log("mcuboot ASSERT L%d", line);
+    for (;;) {
+        watchdog_feed();
+    }
+}
+
 /* 跳转应用: 关中断 -> 停 tick -> VTOR/MSP -> Reset_Handler。
  * vec = 应用向量表地址 (镜像头之后), sp/pc 取前两项 */
 static void boot_jump_vec(uint32_t vec)

@@ -40,6 +40,8 @@
 #include "w5500.h"        /* w5500_net_init / w5500_net_ready */
 #include "w5500_macraw.h" /* w5500_macraw_init (LwIP MACRAW netif) */
 #include "udp_cfg.h"      /* udp_cfg_start */
+#include "fw_upg.h"       /* fw_upg_os_init */
+#include "fw_udp.h"       /* fw_udp_start */
 #include "wizchip_conf.h" /* getPHYCFGR / PHYCFGR_LNK_ON (boot 链路轮询) */
 
 #include "lwip/tcpip.h"   /* tcpip_init */
@@ -128,6 +130,20 @@ static StaticTask_t boot_tcb;
 /* littlefs 实例: boot 任务静态持有 (挂载后须永久有效), history_init 保存指针 */
 static lfs_t lfs;
 
+/* W25Q SPI 总线互斥: littlefs (历史/下载) 与固件升级写并发访问 NOR */
+static StaticSemaphore_t nor_lock_cb;
+static SemaphoreHandle_t nor_lock;
+
+static void nor_lock_take(void)
+{
+    (void)xSemaphoreTake(nor_lock, portMAX_DELAY);
+}
+
+static void nor_lock_give(void)
+{
+    (void)xSemaphoreGive(nor_lock);
+}
+
 static time_t hist_clock_fn(void)
 {
     return (time_t)io_now_epoch();
@@ -215,6 +231,9 @@ static void boot_task(void *arg)
     os_init();       /* io_lock 互斥锁 */
     log_init();      /* USART1 日志最先就绪 */
     io_time_init();  /* LSE+RTC -> epoch 缓存 + 1Hz 定时器 */
+    fw_upg_os_init();
+    nor_lock = xSemaphoreCreateMutexStatic(&nor_lock_cb);
+    w25qxx_set_bus_lock(nor_lock_take, nor_lock_give);
 
     /* 开机 banner (对齐 Zephyr main: 构建时间/板名/容量/版本) */
     LOG_INF("build time: %s %s", __DATE__, __TIME__);
@@ -280,6 +299,7 @@ static void boot_task(void *arg)
     mb_tcp_start();
     mb_rtu_start();
     udp_cfg_start();
+    fw_udp_start();
     web_httpd_start();
 
 
