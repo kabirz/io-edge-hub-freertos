@@ -4,8 +4,15 @@
 #  用法: ./build.sh [--pull-only|--no-pull]
 #    默认: 拉子模块 -> 配置 -> 编译 -> 有私钥则签名
 #  依赖: git / cmake / ninja-build / python3 (签名另需 pip install imgtool)
-#  工具链: 自动探测 (Zephyr SDK -> PATH 上的交叉 gcc); 也可用环境变量
-#          STM32_TOOLCHAIN_PATH / STM32_TARGET_TRIPLET 显式指定
+#  工具链 (按优先级):
+#    1. 系统 arm-none-eabi-gcc (默认; stm32-cmake 内置默认 /usr +
+#       arm-none-eabi, 无需任何 -D 参数)
+#       Ubuntu: sudo apt install gcc-arm-none-eabi libnewlib-arm-none-eabi
+#    2. 环境变量 STM32_TOOLCHAIN_PATH / STM32_TARGET_TRIPLET 显式指定
+#       (如 xpack / Zephyr SDK 的非常规布局)
+#    3. 本机 Zephyr SDK (探测兜底)
+#    候选均须通过编译探针 (stm32-cmake 固定传 --sysroot=<root>/<triplet>,
+#    新版 SDK 目录布局可能不兼容 -> nosys.specs 找不到, 探针能提前发现)
 # ============================================================
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -25,8 +32,6 @@ if [ "$PULL" != 0 ]; then
 fi
 
 # ---- 工具链探测 ----
-# 候选须通过编译探针 (stm32-cmake 固定传 --sysroot=<root>/<triplet>,
-# 新版 SDK 目录布局可能不兼容 -> nosys.specs 找不到, 探针能提前发现)
 tc_probe() { # $1=root $2=triplet
     [ -x "$1/bin/$2-gcc" ] || return 1
     echo 'int main(void){return 0;}' \
@@ -34,54 +39,52 @@ tc_probe() { # $1=root $2=triplet
               --specs=nosys.specs -x c - -o /dev/null 2>/dev/null
 }
 
-TOOLCHAIN_PATH=${STM32_TOOLCHAIN_PATH:-}
-TRIPLET=${STM32_TARGET_TRIPLET:-}
-if [ -n "$TOOLCHAIN_PATH" ]; then
-    tc_probe "$TOOLCHAIN_PATH" "${TRIPLET:-arm-zephyr-eabi}" \
-        || { echo "*** 探针失败: $TOOLCHAIN_PATH 布局不兼容" >&2; exit 1; }
-fi
-if [ -z "$TOOLCHAIN_PATH" ]; then
-    # 本机 Zephyr SDK, 新版本优先, 探针通过才采用
+TC_FLAGS=()   # 传给 cmake 的 -D; 默认路径为空 = 用 stm32-cmake 内置默认
+TC_CHOSEN=    # ""=未找到 / default=系统 arm-none-eabi / env / sdk
+
+if [ -n "${STM32_TOOLCHAIN_PATH:-}" ]; then
+    # 显式指定: 探针校验后透传给 cmake
+    TRIPLET=${STM32_TARGET_TRIPLET:-arm-zephyr-eabi}
+    tc_probe "$STM32_TOOLCHAIN_PATH" "$TRIPLET" \
+        || { echo "*** 探针失败: $STM32_TOOLCHAIN_PATH 布局不兼容" >&2; exit 1; }
+    TC_FLAGS=(-DSTM32_TOOLCHAIN_PATH="$STM32_TOOLCHAIN_PATH"
+              -DSTM32_TARGET_TRIPLET="$TRIPLET")
+    TC_CHOSEN=env
+    echo "[toolchain] env override: $STM32_TOOLCHAIN_PATH ($TRIPLET)"
+elif command -v arm-none-eabi-gcc >/dev/null 2>&1 \
+        && tc_probe /usr arm-none-eabi; then
+    # 系统 arm-none-eabi, stm32-cmake 默认即此, 不传任何 -D
+    TC_CHOSEN=default
+    echo "[toolchain] system arm-none-eabi (stm32-cmake defaults)"
+else
+    # Zephyr SDK 兜底 (新版本优先, 探针通过才采用)
     for cand in $(ls -d "$HOME"/zephyr-sdk-*/arm-zephyr-eabi 2>/dev/null |
                   sort -Vr); do
         if tc_probe "$cand" arm-zephyr-eabi; then
-            TOOLCHAIN_PATH=$cand
-            TRIPLET=arm-zephyr-eabi
+            TC_FLAGS=(-DSTM32_TOOLCHAIN_PATH="$cand"
+                      -DSTM32_TARGET_TRIPLET=arm-zephyr-eabi)
+            TC_CHOSEN=sdk
+            echo "[toolchain] Zephyr SDK: $cand"
             break
         fi
         echo "[info] SDK $cand 布局不兼容, 跳过"
     done
 fi
-if [ -z "$TOOLCHAIN_PATH" ]; then
-    for t in arm-zephyr-eabi arm-none-eabi; do
-        if command -v "$t-gcc" >/dev/null 2>&1; then
-            GCC_BIN=$(readlink -f "$(command -v "$t-gcc")")
-            ROOT=$(dirname "$(dirname "$GCC_BIN")")
-            if tc_probe "$ROOT" "$t"; then
-                TOOLCHAIN_PATH=$ROOT
-                TRIPLET=$t
-                break
-            fi
-            echo "[info] $t-gcc (sysroot $ROOT/$t) 探针失败, 跳过"
-        fi
-    done
-fi
-if [ -z "$TOOLCHAIN_PATH" ]; then
+if [ -z "$TC_CHOSEN" ]; then
     echo "*** 未找到可用交叉工具链 (探针均失败):" >&2
-    echo "    安装 Zephyr SDK 0.16/0.17, 或设置 STM32_TOOLCHAIN_PATH /" >&2
-    echo "    STM32_TARGET_TRIPLET 指向兼容布局的 arm-none-eabi GCC" >&2
+    echo "    sudo apt install gcc-arm-none-eabi libnewlib-arm-none-eabi" >&2
+    echo "    或设置 STM32_TOOLCHAIN_PATH / STM32_TARGET_TRIPLET" >&2
     exit 1
 fi
 
 # Linux 与 Windows 不共用 build 目录 (CMake 缓存的工具链路径互斥)
 BUILD_DIR=${BUILD_DIR:-build-linux}
-echo "=== [2/3] configure + build ($BUILD_DIR, TOOLCHAIN=$TOOLCHAIN_PATH TRIPLET=$TRIPLET) ==="
+echo "=== [2/3] configure + build ($BUILD_DIR) ==="
 GEN=()
 command -v ninja >/dev/null 2>&1 && GEN=(-G Ninja)
 cmake -S . -B "$BUILD_DIR" "${GEN[@]}" -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_TOOLCHAIN_FILE=deps/stm32-cmake/cmake/stm32_gcc.cmake \
-    -DSTM32_TOOLCHAIN_PATH="$TOOLCHAIN_PATH" \
-    -DSTM32_TARGET_TRIPLET="$TRIPLET" \
+    "${TC_FLAGS[@]}" \
     -DSTM32_CUBE_F4_PATH=deps/STM32CubeF4 \
     -DFREERTOS_PATH=deps/FreeRTOS-Kernel
 cmake --build "$BUILD_DIR"

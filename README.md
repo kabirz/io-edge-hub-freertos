@@ -72,9 +72,10 @@ git -C deps/mcuboot submodule update --init ext/mbedtls
 ```
 
 或直接用一键脚本: **`build.bat`** (Windows) / **`build.sh`** (Linux),
-完成 拉取 -> 配置 -> 编译 -> 签名 (无私钥时跳过并提示)。build.sh 自动
-探测工具链 (Zephyr SDK 优先, 编译探针校验布局兼容性), 产物在
-`build-linux/` (与 Windows 的 `build/` 隔离, 避免 CMake 缓存冲突)。
+完成 拉取 -> 配置 -> 编译 -> 签名 (无私钥时跳过并提示)。build.sh 默认
+系统 arm-none-eabi (零 -D 参数), 编译探针校验布局兼容性, Zephyr SDK
+仅作兜底; 产物在 `build-linux/` (与 Windows 的 `build/` 隔离, 避免
+CMake 缓存冲突)。
 
 不带这两个 HAL/CMSIS 嵌套子模块时, 配置阶段即报头文件缺失。
 带宽紧张可加 `--depth 1` (GitHub 支持按固定 SHA 浅取), 失败则去掉重试。
@@ -111,12 +112,13 @@ cmake -S . -B build-rel -G Ninja -DCMAKE_BUILD_TYPE=Release ^
 cmake --build build-rel
 ```
 
-工具链回退: 若无 Zephyr SDK, 任何 arm-none-eabi GCC (如 xpack
-arm-none-eabi-gcc) 均可 —— stm32-cmake 按目标三元组找编译器, 把
-`STM32_TOOLCHAIN_PATH` 指向 xpack 的安装根目录 (含 `bin/`、
-`arm-none-eabi/`), `STM32_TARGET_TRIPLET=arm-none-eabi` 即可; 代码未用
-Zephyr 专属工具, newlib/nosys 链接路径一致。(本项目实际构建一直用
-Zephyr SDK, 回退路径未逐版本验证。)
+工具链回退: Linux 默认用系统 `arm-none-eabi-gcc` (stm32-cmake 内置
+默认 `/usr` + `arm-none-eabi`, 无需任何 `-D` 参数; Ubuntu 安装
+`sudo apt install gcc-arm-none-eabi libnewlib-arm-none-eabi`)。任何
+arm-none-eabi GCC (如 xpack) 均可 —— 把 `STM32_TOOLCHAIN_PATH` 指向
+其安装根目录 (含 `bin/`、`arm-none-eabi/`), `STM32_TARGET_TRIPLET=
+arm-none-eabi`; `build.sh` 的编译探针会先验证布局兼容性。
+Windows 开发机实际使用 Zephyr SDK 0.17.0 (`build.bat` 默认值)。
 
 ## 主机单元测试
 
