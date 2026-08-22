@@ -12,7 +12,7 @@
  * 输出经 log_line/log_raw: 与日志同一把锁, 行级不交织。
  *
  * 命令集:
- *   help / tasks / reboot / io <子命令>
+ *   help / tasks / reboot / io <子命令>   (Tab 补全, 上下文感知)
  * io 子命令对齐 Zephyr 版 src/shell.c, 写路径复用 io_write_holding /
  * io_write_do_bit, 与 Modbus/Web(HTTP/WS)/UDP 副作用一致:
  *   io                  -- IO/配置总览
@@ -549,6 +549,166 @@ static void sh_dispatch(char *line)
 
 /* ==================== 任务 ==================== */
 
+/* ==================== Tab 补全 (命令树) ==================== */
+
+struct sh_cmd {
+	const char *name;
+	const struct sh_cmd *sub; /* 子命令表, NULL = 叶子 (后接参数) */
+};
+
+static const struct sh_cmd io_do_cmds[] = {
+	{"set", NULL},
+	{NULL, NULL},
+};
+
+static const struct sh_cmd io_rs485_cmds[] = {
+	{"baud", NULL},
+	{"sid", NULL},
+	{NULL, NULL},
+};
+
+static const struct sh_cmd io_can_cmds[] = {
+	{"id", NULL},
+	{"bps", NULL},
+	{NULL, NULL},
+};
+
+static const struct sh_cmd io_cmds[] = {
+	{"help", NULL},   {"info", NULL},  {"di", NULL},
+	{"do", io_do_cmds}, {"ai", NULL},  {"rs485", io_rs485_cmds},
+	{"can", io_can_cmds}, {"ip", NULL}, {"reg", NULL},
+	{"save", NULL},   {"factory", NULL},
+	{NULL, NULL},
+};
+
+static const struct sh_cmd root_cmds[] = {
+	{"help", NULL}, {"tasks", NULL}, {"ps", NULL}, {"reboot", NULL},
+	{"io", io_cmds},
+	{NULL, NULL},
+};
+
+/* 沿命令树解析已键入的完整词, 返回末词所在的候选表 (NULL = 参数区/
+ * 未知命令, 不补全); last/len 输出行尾未完成词 (行尾空格则 len=0) */
+static const struct sh_cmd *complete_level(const char *line,
+					   const char **last, size_t *len)
+{
+	const struct sh_cmd *tbl = root_cmds;
+	const char *p = line;
+
+	while (*p != '\0') {
+		while (*p == ' ' || *p == '\t') {
+			p++;
+		}
+		if (*p == '\0') {
+			break; /* 行尾空白: 末词为空 */
+		}
+
+		{
+			const char *w = p;
+
+			while (*p != '\0' && *p != ' ' && *p != '\t') {
+				p++;
+			}
+			if (*p == '\0') { /* 未完成末词 */
+				*last = w;
+				*len = (size_t)(p - w);
+				return tbl;
+			}
+
+			/* 完整词: 命令树下降, 不在树上的词视为参数 */
+			if (tbl != NULL) {
+				const struct sh_cmd *c;
+
+				for (c = tbl; c->name != NULL; c++) {
+					if (strlen(c->name) == (size_t)(p - w) &&
+					    strncmp(c->name, w, (size_t)(p - w)) == 0) {
+						tbl = c->sub;
+						break;
+					}
+				}
+				if (c->name == NULL) {
+					tbl = NULL;
+				}
+			}
+		}
+	}
+
+	*last = p; /* 空行/行尾空白 */
+	*len = 0;
+	return tbl;
+}
+
+/* Tab: 唯一匹配补全 (+空格); 多匹配延伸公共前缀并列出候选 */
+static void sh_complete(char *line, uint16_t *n)
+{
+	const struct sh_cmd *tbl;
+	const struct sh_cmd *cand[16];
+	const char *last;
+	const char *ext;
+	size_t len;
+	size_t lcp;
+	int ncand = 0;
+	int i;
+
+	tbl = complete_level(line, &last, &len);
+	if (tbl == NULL) {
+		return; /* 参数区: 不补全 */
+	}
+
+	for (const struct sh_cmd *c = tbl; c->name != NULL; c++) {
+		if (strncmp(c->name, last, len) == 0 && ncand < 16) {
+			cand[ncand++] = c;
+		}
+	}
+	if (ncand == 0) {
+		return;
+	}
+
+	if (ncand == 1) {
+		uint16_t old_n = *n;
+
+		ext = &cand[0]->name[len]; /* 缺失后缀 (可能为空) */
+		while (*ext != '\0' && *n + 2u < SH_LINE_MAX) {
+			line[(*n)++] = *ext++;
+		}
+		line[(*n)++] = ' '; /* 补全的词后接参数/空格 */
+		line[*n] = '\0';
+		log_raw(&line[old_n], (uint16_t)(*n - old_n));
+		return;
+	}
+
+	/* 多匹配: 先延伸最长公共前缀 */
+	lcp = strlen(cand[0]->name);
+	for (i = 1; i < ncand; i++) {
+		size_t j = 0;
+
+		while (j < lcp && cand[0]->name[j] == cand[i]->name[j]) {
+			j++;
+		}
+		lcp = j;
+	}
+	while (len < lcp && *n + 1u < SH_LINE_MAX) {
+		line[(*n)++] = cand[0]->name[len++];
+	}
+	line[*n] = '\0';
+
+	/* 列出候选并重印当前行 */
+	log_raw("\r\n", 2);
+	{
+		char row[128];
+		int m = 0;
+
+		row[0] = '\0';
+		for (i = 0; i < ncand; i++) {
+			m += snprintf(row + m, sizeof(row) - (size_t)m, "%s%s",
+				      i ? "  " : "", cand[i]->name);
+		}
+		log_line("%s", row);
+	}
+	sh_prompt();
+	log_raw(line, (uint16_t)*n);
+}
+
 static void sh_task_fn(void *arg)
 {
 	char line[SH_LINE_MAX];
@@ -556,6 +716,10 @@ static void sh_task_fn(void *arg)
 	bool prev_cr = false;
 
 	(void)arg;
+
+	/* line 全程保持 NUL 终止 (FreeRTOS 建任务时栈填充 0xA5 而非清零,
+	 * dispatch 后也留有旧词残留; complete_level 依赖 C 字符串边界) */
+	line[0] = '\0';
 
 	log_line("");
 	log_line("shell ready (help for commands)");
@@ -573,18 +737,21 @@ static void sh_task_fn(void *arg)
 			prev_cr = (c == '\r');
 			log_raw("\r\n", 2);
 			if (n != 0) {
-				line[n] = '\0';
 				sh_dispatch(line);
 				n = 0;
+				line[0] = '\0';
 			}
 			sh_prompt();
 		} else if (c == 0x08 || c == 0x7F) { /* BS / DEL */
 			if (n != 0) {
-				n--;
+				line[--n] = '\0';
 				log_raw("\b \b", 3);
 			}
-		} else if (c >= 0x20 && c < 0x7F && n + 1u < sizeof(line)) {
+		} else if (c == '\t') { /* Tab 补全 */
+			sh_complete(line, &n);
+		} else if (c >= 0x20 && c < 0x7F && n + 2u < sizeof(line)) {
 			line[n++] = (char)c;
+			line[n] = '\0';
 			log_raw((const char *)&c, 1);
 		}
 		/* 其余控制字符忽略 */

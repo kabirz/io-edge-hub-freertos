@@ -236,6 +236,9 @@ io> io reg [addr [val]]  # 寄存器 dump/读写 (FC03/FC06 同路径)
 io> io save / io factory
 ```
 
+命令支持 Tab 补全 (上下文感知: `io do s<Tab>` -> `set`,
+`io can <Tab>` 列出 `id`/`bps`; 参数位置不补全)。
+
 io 子命令写路径全部复用 `io_write_holding` / `io_write_do_bit`,
 与 Modbus/Web/UDP 副作用一致 (协议命令码与 Zephyr 版对齐)。
 
