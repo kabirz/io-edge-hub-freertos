@@ -4,10 +4,11 @@
  *
  * 调试 shell (USART1, 与日志同一串口) — Zephyr 版 SHELL 的最小对应物。
  *
- * 接收路径: 寄存器级 RXNE 中断 -> 环形缓冲 -> shell 任务行组装
- * (回显 / 退格 / CRLF 收敛)。不走 HAL_UART_Receive_IT: HAL 的单把
- * huart Lock 会被日志任务的阻塞发送 (HAL_UART_Transmit) 长时间持有,
- * ISR 里重挂接收遇到 HAL_BUSY 即断流; 寄存器级 RX 与 TX 轮询互不干扰。
+ * 接收路径: 寄存器级 RXNE 中断 -> 环形缓冲 -> shell 任务行编辑
+ * (回显/退格/CRLF 收敛/左右移动光标/插入删除/上下翻历史/Tab 补全)。
+ * 不走 HAL_UART_Receive_IT: HAL 的单把 huart Lock 会被日志任务
+ * 长时间持有, ISR 里重挂接收遇到 HAL_BUSY 即断流; 寄存器级 RX
+ * 与 TX 互不干扰。
  *
  * 输出经 log_line/log_raw: 与日志同一把锁, 行级不交织。
  *
@@ -51,8 +52,9 @@
 #define SH_RING_MAX  128u  /* ISR->任务 环形缓冲 */
 #define SH_LINE_MAX  96u   /* 行缓冲 (含 NUL) */
 #define SH_ARG_MAX   6     /* "io do set 3 1" 最深 5 词 */
+#define SH_HIST_MAX  8u    /* 历史命令条数 */
 #define SH_TASK_PRIO 1
-#define SH_TASK_STACK 512  /* 字 = 2048B: snprintf/gmtime/strtoul 深度 */
+#define SH_TASK_STACK 640  /* 字 = 2560B: snprintf/编辑 memmove/重绘缓冲 */
 
 static StaticTask_t sh_tcb;
 static StackType_t sh_stack[SH_TASK_STACK];
@@ -108,6 +110,54 @@ static uint8_t sh_getchar(void)
 static void sh_prompt(void)
 {
 	log_raw("io> ", 4);
+}
+
+/* ==================== 历史命令 ==================== */
+
+static char sh_hist[SH_HIST_MAX][SH_LINE_MAX];
+static uint8_t sh_hist_len;    /* 已存条数 (<= SH_HIST_MAX) */
+static uint8_t sh_hist_newest; /* 最新条下标 (环形) */
+
+/* 执行后存一条; 与最新条相同则跳过 (连续重复去重) */
+static void hist_store(const char *line)
+{
+	if (sh_hist_len != 0u &&
+	    strcmp(sh_hist[sh_hist_newest], line) == 0) {
+		return;
+	}
+	sh_hist_newest = (uint8_t)((sh_hist_newest + 1u) % SH_HIST_MAX);
+	/* line 已按 SH_LINE_MAX-1 截断为 NUL 终止串 */
+	strcpy(sh_hist[sh_hist_newest], line);
+	if (sh_hist_len < SH_HIST_MAX) {
+		sh_hist_len++;
+	}
+}
+
+/* nav: 0=最新, sh_hist_len-1=最旧; 越界返回 NULL */
+static const char *hist_get(uint8_t nav)
+{
+	if (nav >= sh_hist_len) {
+		return NULL;
+	}
+	return sh_hist[(uint8_t)((sh_hist_newest + SH_HIST_MAX - nav) %
+				 SH_HIST_MAX)];
+}
+
+/* 整行重绘: \r + prompt + 行 + 清行尾, 光标回退到 pos。
+ * 行中编辑 (插入/中段删除/历史召回) 后调用; 终端须支持 ANSI 序列
+ * (\x1b[K / \x1b[nD), PuTTY/SecureCRT/串口工具通用 */
+static void sh_redraw(const char *line, uint16_t n, uint16_t pos)
+{
+	char buf[SH_LINE_MAX + 16];
+	int m = snprintf(buf, sizeof(buf), "\rio> %.*s\x1b[K", (int)n, line);
+
+	if (m > 0 && pos < n) {
+		m += snprintf(buf + m, sizeof(buf) - (size_t)m, "\x1b[%uD",
+			      (unsigned)(n - pos));
+	}
+	if (m > 0) {
+		log_raw(buf, (uint16_t)m);
+	}
 }
 
 static int sh_split(char *line, char *argv[], int max)
@@ -712,7 +762,11 @@ static void sh_complete(char *line, uint16_t *n)
 static void sh_task_fn(void *arg)
 {
 	char line[SH_LINE_MAX];
+	char draft[SH_LINE_MAX]; /* 历史浏览中暂存的未提交行 */
 	uint16_t n = 0;
+	uint16_t pos = 0;    /* 光标 (0..n) */
+	uint8_t esc = 0;     /* ANSI 转义状态: 0=无 1=ESC 2='['/'O' 后 */
+	int8_t nav = -1;     /* 历史浏览偏移, -1=不在浏览 */
 	bool prev_cr = false;
 
 	(void)arg;
@@ -727,6 +781,74 @@ static void sh_task_fn(void *arg)
 
 	for (;;) {
 		uint8_t c = sh_getchar();
+		bool arrow = false;
+
+		/* ANSI 转义序列: ESC [ <param> <A-D>. 参数位 (数字/';')
+		 * 吞掉 -- 覆盖 ESC[3~ (Del) 与 ESC[1;5D (Ctrl+方向) 等;
+		 * '~' 结尾的功能键整段忽略。'O' 为应用模式方向键前缀 */
+		if (esc != 0) {
+			if (esc == 1u && (c == '[' || c == 'O')) {
+				esc = 2;
+				continue;
+			}
+			if (esc == 2u &&
+			    ((c >= '0' && c <= '9') || c == ';')) {
+				continue;
+			}
+			arrow = (c >= 'A' && c <= 'D');
+			esc = 0;
+			if (!arrow) {
+				continue; /* '~' 等功能键尾: 忽略 */
+			}
+		} else if (c == 0x1B) {
+			esc = 1;
+			continue;
+		}
+
+		if (arrow) {
+			if (c == 'C') { /* 右 */
+				if (pos < n) {
+					pos++;
+					log_raw("\x1b[C", 3);
+				}
+			} else if (c == 'D') { /* 左 */
+				if (pos > 0) {
+					pos--;
+					log_raw("\x1b[D", 3);
+				}
+			} else if (c == 'A') { /* 上: 往旧翻 */
+				const char *h;
+
+				if (nav < 0) {
+					strcpy(draft, line); /* 暂存草稿 */
+					nav = 0;
+				} else if (nav + 1 < (int8_t)sh_hist_len) {
+					nav++;
+				}
+				h = hist_get((uint8_t)nav);
+				if (h != NULL) {
+					strcpy(line, h);
+					n = (uint16_t)strlen(h);
+					pos = n;
+					sh_redraw(line, n, pos);
+				}
+			} else { /* 下: 往新翻, 翻出最新回草稿 */
+				const char *h;
+
+				if (nav < 0) {
+					continue;
+				}
+				nav--;
+				h = (nav < 0) ? draft : hist_get((uint8_t)nav);
+				if (h != NULL) {
+					strcpy(line, h);
+					n = (uint16_t)strlen(h);
+					pos = n;
+					sh_redraw(line, n, pos);
+				}
+			}
+			continue;
+		}
 
 		if (c == '\n' && prev_cr) { /* CRLF 序列的 LF 不再触发 */
 			prev_cr = false;
@@ -737,22 +859,54 @@ static void sh_task_fn(void *arg)
 			prev_cr = (c == '\r');
 			log_raw("\r\n", 2);
 			if (n != 0) {
+				hist_store(line);
+				nav = -1;
 				sh_dispatch(line);
 				n = 0;
+				pos = 0;
 				line[0] = '\0';
 			}
 			sh_prompt();
-		} else if (c == 0x08 || c == 0x7F) { /* BS / DEL */
-			if (n != 0) {
-				line[--n] = '\0';
-				log_raw("\b \b", 3);
+		} else if (c == 0x08 || c == 0x7F) { /* BS / DEL 删光标前 */
+			if (pos > 0) {
+				memmove(&line[pos - 1u], &line[pos],
+					(size_t)(n - pos));
+				n--;
+				pos--;
+				line[n] = '\0';
+				if (pos == n) {
+					log_raw("\b \b", 3); /* 行尾快路径 */
+				} else {
+					sh_redraw(line, n, pos);
+				}
 			}
-		} else if (c == '\t') { /* Tab 补全 */
+		} else if (c == '\t') { /* Tab 补全 (补全词取行尾) */
+			if (pos < n) { /* 光标在行中: 先跳到行尾 */
+				char csi[8];
+				int m = snprintf(csi, sizeof(csi),
+						 "\x1b[%uC", n - pos);
+
+				if (m > 0) {
+					log_raw(csi, (uint16_t)m);
+				}
+				pos = n;
+			}
 			sh_complete(line, &n);
+			pos = n;
 		} else if (c >= 0x20 && c < 0x7F && n + 2u < sizeof(line)) {
-			line[n++] = (char)c;
-			line[n] = '\0';
-			log_raw((const char *)&c, 1);
+			if (pos == n) { /* 追加 (常见路径) */
+				line[n++] = (char)c;
+				pos = n;
+				line[n] = '\0';
+				log_raw((const char *)&c, 1);
+			} else { /* 行中插入: 后段右移 + 整行重绘 */
+				memmove(&line[pos + 1u], &line[pos],
+					(size_t)(n - pos));
+				line[pos++] = (char)c;
+				n++;
+				line[n] = '\0';
+				sh_redraw(line, n, pos);
+			}
 		}
 		/* 其余控制字符忽略 */
 	}

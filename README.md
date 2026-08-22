@@ -237,7 +237,9 @@ io> io save / io factory
 ```
 
 命令支持 Tab 补全 (上下文感知: `io do s<Tab>` -> `set`,
-`io can <Tab>` 列出 `id`/`bps`; 参数位置不补全)。
+`io can <Tab>` 列出 `id`/`bps`; 参数位置不补全)、上下方向键翻
+历史命令 (8 条环形, 连续重复去重)、左右方向键移动光标行内编辑
+(插入/删除, 中段编辑整行重绘)。
 
 io 子命令写路径全部复用 `io_write_holding` / `io_write_do_bit`,
 与 Modbus/Web/UDP 副作用一致 (协议命令码与 Zephyr 版对齐)。
