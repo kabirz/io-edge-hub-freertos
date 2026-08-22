@@ -23,7 +23,8 @@ def pytest_addoption(parser):
     parser.addoption("--baud", type=int, default=115200)
     parser.addoption("--rs485-port", default=None,
                      help="USB-RS485 adapter COM port for Modbus RTU tests")
-    parser.addoption("--rs485-baud", type=int, default=9600)
+    parser.addoption("--rs485-baud", type=int, default=0,
+                     help="RS485 baud (0 = follow device config)")
     parser.addoption("--fw-image", default=None,
                      help="signed image for the upgrade test "
                           "(default: build/app.signed.bin)")
