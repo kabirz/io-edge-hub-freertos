@@ -328,19 +328,19 @@ static void conn_pump(struct http_conn *c)
 	/* 全部写出且确认完毕: 响应完成 (keep-alive 或关闭) */
 	if (c->written >= c->rsp_total && c->acked >= c->rsp_total) {
 		bool keep = c->keep_alive;
+		bool pipelined = c->rx_len > 0;
 
 		if (c->kind == RESP_FILE) {
 			history_web_close();
 		}
 		c->kind = RESP_NONE;
-		c->rx_len = 0;
 		c->hdr_done = false;
 		if (!keep) {
 			conn_close(c, "done");
 			return;
 		}
 		c->t_idle = now_ms();
-		if (c->rx_len > 0) { /* 流水线残留 (少见) */
+		if (pipelined) { /* 流水线残留 (少见) */
 			http_process_rx(c);
 		}
 	}
@@ -667,6 +667,16 @@ static void http_process_rx(struct http_conn *c)
 					conn_pump(c);
 					return;
 				}
+				uint16_t used = c->body_off;
+
+				memmove(c->rx, c->rx + used, c->rx_len - used);
+				c->rx_len -= used;
+				c->hdr_done = false;
+				conn_pump(c);
+				if (c->kind != RESP_NONE) {
+					return;
+				}
+				continue;
 			}
 
 			dispatch(c, method, target, query, NULL, 0);
