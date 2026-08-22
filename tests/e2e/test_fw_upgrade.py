@@ -95,6 +95,16 @@ def test_upgrade_over_ws(dev, fw_image):
     finally:
         ws.close()
 
+    # ws fw_end 走 ~3s 延迟重启 (heartbeat 优雅路径), 必须先等设备离线,
+    # 否则 wait_online 会在重启前抢答, swap 落到后续测试头上
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        try:
+            dev.udp_xfer(b"\x04", timeout=1.0)
+            time.sleep(0.5)
+        except OSError:
+            break
+
     assert wait_online(dev, 120) == version_before
     info = wait_http_json(dev)
     assert info["uptime_ms"] < 120_000, info["uptime_ms"]

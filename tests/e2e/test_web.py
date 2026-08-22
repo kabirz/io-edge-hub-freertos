@@ -91,10 +91,7 @@ def test_time_endpoint(dev):
                  json.dumps({"ts": int(time.time())}))
 
 
-def test_cfg_validation(dev, fw_kind):
-    if fw_kind != "freertos":
-        pytest.skip("/api/cfg is a FreeRTOS-port route "
-                    "(Zephyr exposes cfg as a WS command only)")
+def test_cfg_validation(dev):
     _, info0 = dev.http_json("GET", "/api/info")
     orig_sid = info0["slave_id"]
     try:
@@ -121,12 +118,7 @@ def test_cfg_validation(dev, fw_kind):
                  ('{"can_id":2048}', "invalid can id")]
         for body, want_err in cases:
             st, r = dev.http_json("POST", "/api/cfg", body)
-            if fw_kind == "freertos":
-                assert "400" in st and want_err in r.get("err", ""), \
-                    (body, st, r)
-            else:
-                # Zephyr http lib maps handler errors to a plain 500
-                assert st.split()[1] != "200", (body, st)
+            assert "400" in st and want_err in r.get("err", ""), (body, st, r)
     finally:
         dev.http("POST", "/api/cfg", json.dumps({"sid": orig_sid}))
     _, info = dev.http_json("GET", "/api/info")
@@ -147,18 +139,18 @@ def test_history_download_invalid_name(dev):
 def test_404_and_method(dev, fw_kind):
     st, _, _ = dev.http("GET", "/api/nonexistent")
     assert "404" in st, st
-    if fw_kind == "freertos":
+    if fw_kind == "freertos":  # JSON 错误体是移植版自有增强
         _, r = dev.http_json("GET", "/api/nonexistent")
         assert r.get("err") == "not found", r
     st, _, _ = dev.http("DELETE", "/api/io")
-    want = "404" if fw_kind == "freertos" else "405"  # Zephyr 精确拒绝方法
-    assert want in st, st
+    assert "405" in st, st
 
 
 def test_body_too_large(dev):
     st, _, body = dev.http("POST", "/api/do", '{"index":1,"value":1,"pad":"' +
                            "x" * 150 + '"}')
-    assert "400" in st and b"body too large" in body, (st, body[:120])
+    assert "400" in st and json.loads(body) == {
+        "ok": False, "err": "body too large"}, (st, body[:120])
 
 
 def test_request_line_parser_edges(dev, fw_kind):

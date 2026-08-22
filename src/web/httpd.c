@@ -498,6 +498,23 @@ static void dispatch(struct http_conn *c, const char *method, const char *path,
 	}
 
 	(void)query;
+
+	/* 路径存在但方法不符: 405 (与 Zephyr http 库语义一致), 其余才 404 */
+	static const char *const known_paths[] = {
+		"/", "/api/info", "/api/io", "/api/regs", "/api/history",
+		"/api/history/download", "/ws",
+		"/api/do", "/api/reg", "/api/time", "/api/cfg", "/api/save",
+		"/api/reboot", "/api/history/delete",
+	};
+
+	for (size_t i = 0; i < sizeof(known_paths) / sizeof(known_paths[0]);
+	     i++) {
+		if (strcmp(path, known_paths[i]) == 0) {
+			respond_json_err(c, "405 Method Not Allowed",
+					 "method not allowed");
+			return;
+		}
+	}
 	respond_mem(c, "404 Not Found", "application/json",
 		    (const uint8_t *)JSON_NOT_FND, sizeof(JSON_NOT_FND) - 1, true, NULL);
 }

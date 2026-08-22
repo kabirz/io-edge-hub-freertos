@@ -111,8 +111,7 @@ class FwUpg:
             r = self.xfer(bytes([0x05]), 3.0)
         except socket.timeout:
             return  # device may already be rebooting (e.g. after END)
-        # Zephyr replies 1 byte, the FreeRTOS port appends the ok flag
-        assert r[0] == 0x05 and r[1:2] in (b"", b"\x01"), r.hex()
+        assert r == bytes([0x05, 0x01]), r.hex()
 
 
 def wait_online(dev, timeout, probe_interval=1.0):

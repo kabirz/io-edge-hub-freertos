@@ -96,8 +96,7 @@ def test_udp_reboot(dev):
 
     def trigger():
         r = dev.udp_xfer(bytes([0x05]))
-        # Zephyr replies 1 byte, the FreeRTOS port appends the ok flag
-        assert r[0] == 0x05 and r[1:2] in (b"", b"\x01"), r.hex()
+        assert r == bytes([0x05, 0x01]), r.hex()
 
     expect_reboot_and_recover(dev, trigger)
 

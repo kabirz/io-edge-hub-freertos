@@ -58,7 +58,7 @@ def test_http_info_fields(dev):
     assert info["board"].startswith("io_edge_f407vet6"), info["board"]
     assert info["hclk_mhz"] == 168
     assert info["flash_kb"] == 512
-    assert 128 <= info["sram_kb"] <= 192  # Zephyr 报 128, FreeRTOS 报 192(含 CCM)
+    assert info["sram_kb"] == 192  # F407: 128KB 主 SRAM + 64KB CCM
     assert info["ip"] == dev.ip
     assert info["net_up"] is True
     assert re.match(r"^v\d+\.\d+\.\d+_", info["version"]), info["version"]

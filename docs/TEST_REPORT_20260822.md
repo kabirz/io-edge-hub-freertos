@@ -9,14 +9,13 @@
 | 项目 | FreeRTOS v0.3.0 | Zephyr v0.2.2_4c57a2 |
 |---|---|---|
 | 主机单元测试 | 12/12 通过 | — |
-| e2e 全量套件 | **92/92 通过** (含 RTU) | **80 通过 / 11 有据跳过 / 2 失败** |
+| e2e 全量套件 | **93/93 通过** (含 RTU/串口) | **83 通过 / 10 有据跳过 / 0 失败** |
 | 30s 五协议混合负载 | 零错误 | 零错误 |
-| 深度测试发现固件 bug | 2 个 httpd bug, 已修复 (84f5f5f) | **1 个数据损坏级 bug (FTP RETR), 未修复** |
+| 深度测试发现固件 bug | 2 个 httpd bug, 已修复 (84f5f5f) | **1 个数据损坏级 bug (FTP RETR), 已修复** |
 
-两版性能画像互补: FreeRTOS 版 HTTP/FTP 读快, Zephyr 版 Modbus TCP
-尾延迟更稳。Zephyr 版存在可复现的 FTP 下载内容损坏 (见 §6), 其余
-2 项失败即由此引起; FreeRTOS 移植版 (重写的单线程 select 实现)
-多次复验不受影响。
+两版已双向同步 (web/FTP/Modbus/升级四域行为一致, 见 §6.1), 剩余差异均为
+库层/策略层 (chunked 传输、并发上限、WS 忙形态等, 见 §6.2)。性能画像:
+FreeRTOS 版 HTTP/FTP 读快, Zephyr 版 Modbus TCP 尾延迟更稳。
 
 ## 2. 测试环境
 
@@ -75,50 +74,57 @@
 Zephyr chunked + 完整 TCP 栈开销); **FTP** 上传同为 NOR 写入瓶颈
 (~42-45KB/s), 下载 FreeRTOS 快 ~40% 且内容可靠。
 
-## 6. Zephyr 侧发现的问题 (未修复, 移植版不受影响)
+## 6. Zephyr 侧发现的问题 (已全部修复)
 
-### 6.1 FTP RETR 数据损坏 (严重, 即 2 项失败根因)
+### 6.1 FTP RETR 数据损坏 (严重, 根因与修复)
 
-- 现象: 大文件 RETR 返回内容与写入不符; 同一文件连续两次 RETR 内容
-  互不相同, 首个差异偏移随机 (31241/57865/223497/262409/375817/684297...)
-- **存储内容完好**: 同一文件经 `/api/history/download` 下载逐字节一致,
-  排除写路径与 littlefs
-- 复现: 全量套件后 3/3 复现; 全新重启后第一笔 1MB 传输正常,
-  第二笔 (256KB) 即损坏 —— 非运行时间劣化, 为固有缺陷
-- 影响: `test_ftp_three_clients_parallel` / `test_ftp_large_file_1mb`
-  失败 (并发 md5 与 1MB 逐字节比对)
-- FreeRTOS 移植版 ftpd 为重写的单线程 select 实现, 多轮 1MB/3 并发
-  md5 校验全部通过
+- 现象: 大文件 RETR 内容错位; 接收流比原文件**短** (如 1MB 少 2223B),
+  损坏区内容在原文件后部重现 —— 即字节被**跳过**
+- 根因: `send()` 在 TX 缓冲紧张时只接受部分字节, 原代码忽略返回值,
+  尾部字节静默丢失 (存储与 littlefs 完好, web 下载逐字节一致可证)
+- 修复: 数据连接全部改走重试到发完的 `send_all()`; 同时 RETR 读缓冲
+  改静态、FTP 线程栈 4096→8192 (深调用链下原栈已越界, 属加固)
+- 复验: 1MB×3 轮逐字节一致, stress FTP 3 并发 + 1MB md5 全过
 
-### 6.2 行为差异清单 (测试已按固件条件化, 均记录在案)
+### 6.2 双向同步 (保证 web/FTP/Modbus/升级四域一致)
 
-| 项 | FreeRTOS | Zephyr |
+| 项 | 同步方向 | 处理 |
 |---|---|---|
-| HTTP API 响应 | Content-Length 短响应 | Transfer-Encoding: chunked |
-| `/api/cfg` 路由 | 有 | **无** (cfg 仅 WS 命令) |
-| 未知方法 (DELETE /api/io) | 404 | 405 Method Not Allowed |
-| 请求行 Tab 分隔 | 200 (sscanf 语义) | 500 |
-| 同段流水线两请求 | 两响应 | 不支持 (首请求即 404) |
-| HTTP 并发连接上限 | 2 | 无固定上限 |
-| Modbus 主站数上限 | 2 | 无上限 (4 并发全服务) |
-| Modbus 未知 FC 异常码 | 0x01 | 0x04 |
-| 截断 PDU | 静默丢弃 | 回错误帧 |
-| UDP REBOOT 应答 | `05 01` | `05` (1 字节) |
-| WS 忙 (第 2 条 /ws) | 503 ws busy | 先 101 再断连 (库先应答后回调) |
-| 超长 body (>128) | 400 且不执行 | 400 但响应含两段 JSON 且 handler 仍执行 |
-| sram_kb 字段 | 192 (含 CCM) | 128 |
+| `/api/cfg` 路由 | FreeRTOS → Zephyr | Zephyr 补路由 (复用 WS cfg 执行器) |
+| 未知方法 (DELETE /api/io) | Zephyr → FreeRTOS | 两边均 405 (RFC 语义) |
+| Modbus 未知 FC 异常码 | FreeRTOS → Zephyr | 两边均 0x01 ILLEGAL FUNCTION |
+| 截断 PDU | FreeRTOS → Zephyr | 两边均静默丢弃 (原 Zephyr 超时后回 0x04) |
+| UDP REBOOT 应答 | FreeRTOS → Zephyr | 两边均 `05 01` |
+| 超长 body (>128) | FreeRTOS → Zephyr | Zephyr 修复为单次 400 且不执行 handler |
+| sram_kb 字段 | FreeRTOS → Zephyr | 两边均 192 (含 64KB CCM) |
+| FTP 传输完整性 | FreeRTOS → Zephyr | 见 §6.1 send_all |
 
-### 6.3 过程记录
+### 6.3 保留差异 (库层/策略层, 不做同步)
 
-- WS 单连接槽位事件: 浏览器开着 SPA 占住 Zephyr 单 WS 槽位
-  (`CONFIG_IO_WEB_WS_HANDLERS=1`), 经代理的半开连接释放不掉, 需重启清槽;
-  WS 相关测试前需关闭浏览器页面
-- Zephyr 版 `web /api/time` 超 int32 时间戳同样被 strtol 钳到 2038
-  (与 FreeRTOS 一致); 版本串同为构建期注入
+| 项 | FreeRTOS | Zephyr | 说明 |
+|---|---|---|---|
+| HTTP API 响应 | Content-Length | chunked | Zephyr http 库行为, 传输层等价 |
+| 请求行 Tab 分隔 | 200 | 500 | 解析器宽容度, 非功能项 |
+| 同段流水线 | 支持 | 404 | Zephyr 库限制 |
+| HTTP 并发上限 / Modbus 主站数 | 2 / 2 | 无上限 | 资源策略 |
+| WS 忙形态 | 503 ws busy | 先 101 再断连 | Zephyr 库先应答后回调 |
+| 404 响应体 | JSON | 纯文本 | 移植版增强 |
+| 串口 shell | io> 自研 shell | Zephyr 原生 shell | 各自生态 |
+
+### 6.4 过程记录
+
+- WS 单连接槽位事件: 浏览器开 SPA 占住 Zephyr 单 WS 槽位
+  (`CONFIG_IO_WEB_WS_HANDLERS=1`), 半开连接需重启清槽
+- WS 升级测试竞态 (已修): fw_end 走 ~3s 延迟重启, wait_online 会在
+  重启前抢答, 20s swap 落到下一模块 —— 现先等离线再等回线
+- 两版 `web /api/time` 超 int32 时间戳均被 strtol 钳到 2038 (行为一致,
+  与 Zephyr 原版相同); 版本串均为构建期注入
 
 ## 7. 收尾状态
 
-- 设备已恢复烧写 FreeRTOS 固件, stress 10/10 复验通过 (FTP 1MB 内容一致)
+- 设备烧写 FreeRTOS 固件 (含 405 同步), 全量 93/93 通过
+- Zephyr 侧同步修改经全量 83+10+0 验证 (west archive 构建)
 - 历史采样使能并已保存 (产品默认态)
-- 相关提交: 84f5f5f (固件修复), 3824b66/e2698c8 (测试套件),
-  bbee7f5 (测试项清单), af25d9a (chunked 兼容), 本次新增双固件条件化
+- 相关提交: 84f5f5f (FreeRTOS httpd 修复), 3824b66/e2698c8 (测试套件),
+  bbee7f5 (测试项清单), af25d9a (chunked 兼容), 8eb8369 (双固件适配),
+  本次新增: FreeRTOS 405 + 测试更新, apps 仓 Zephyr 同步修复
