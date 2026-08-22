@@ -215,34 +215,34 @@ set(APP_INCLUDES
 # 固件升级 (fw_upg/fw_udp + bootutil_public) 的移植层头路径
 list(APPEND APP_INCLUDES ${BOOT_PORT_DIR} ${BOOTUTIL_DIR}/include)
 
-add_executable(fw.elf ${APP_SOURCES} stm32f4xx_hal_conf.h)
+add_executable(app.elf ${APP_SOURCES} stm32f4xx_hal_conf.h)
 # CMAKE_EXECUTABLE_SUFFIX is ".elf" (stm32_gcc.cmake); OUTPUT_NAME keeps target
-# name "fw.elf" for target_* commands while producing artifacts fw.elf / fw.hex.
-set_target_properties(fw.elf PROPERTIES OUTPUT_NAME fw)
+# name "app.elf" for target_* commands while producing artifacts app.elf / app.hex.
+set_target_properties(app.elf PROPERTIES OUTPUT_NAME app)
 
-target_include_directories(fw.elf PRIVATE ${APP_INCLUDES})
-target_compile_options(fw.elf PRIVATE -Wall -Wextra)
+target_include_directories(app.elf PRIVATE ${APP_INCLUDES})
+target_compile_options(app.elf PRIVATE -Wall -Wextra)
 # ioLibrary 选型: W5500, SPI 模式 (wizchip_conf.h 默认 _WIZCHIP_=W6300)
-target_compile_definitions(fw.elf PRIVATE _WIZCHIP_=5500)
+target_compile_definitions(app.elf PRIVATE _WIZCHIP_=5500)
 # LwIP: enable lwipopts.h via -I (src/include is already in path),
 # define LWIP_LITE=1 for reduced feature set, ETHARP_SUPPORT_STATIC_ENTRIES=0
-target_compile_definitions(fw.elf PRIVATE
+target_compile_definitions(app.elf PRIVATE
     LWIP_LITE=1
     ETHARP_SUPPORT_STATIC_ENTRIES=0
 )
 # Release: 仅固件目标关日志 (host 测试在 tests/CMakeLists.txt 自带
 # LOG_ENABLE=0, 不受此开关影响)
 if(APP_RELEASE)
-    target_compile_definitions(fw.elf PRIVATE LOG_ENABLE=0)
+    target_compile_definitions(app.elf PRIVATE LOG_ENABLE=0)
 endif()
 # app 固件位于 slot0 (@0x08010000) 镜像头 (0x200) 之后:
 # SystemInit 必须按偏移重设 VTOR (system_stm32f4xx.c 默认写
 # FLASH_BASE=0x08000000, 会指回 boot)
-target_compile_definitions(fw.elf PRIVATE
+target_compile_definitions(app.elf PRIVATE
     USER_VECT_TAB_ADDRESS
     VECT_TAB_OFFSET=0x10200U
 )
-gen_ld_script(fw.elf fw 0x8010200 0x6FE00)
+gen_ld_script(app.elf app 0x8010200 0x6FE00)
 # ioLibrary 上游不按本项目 -Wall -Wextra 级别维护, 仅这些文件关警告
 # (GCC 用 -w 全关, 排在 -Wall -Wextra 之后生效)
 set_source_files_properties(
@@ -320,7 +320,7 @@ set_source_files_properties(
     deps/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash_ex.c
     PROPERTIES
     COMPILE_OPTIONS "-Wno-unused-parameter")
-target_link_libraries(fw.elf PRIVATE
+target_link_libraries(app.elf PRIVATE
     FreeRTOS::ARM_CM4F
     FreeRTOS::Heap::4
     FreeRTOS::Timers
@@ -343,20 +343,20 @@ target_link_libraries(fw.elf PRIVATE
     STM32::F407xx
     STM32::NoSys
 )
-stm32_generate_hex_file(fw.elf)
-stm32_generate_binary_file(fw.elf)
+stm32_generate_hex_file(app.elf)
+stm32_generate_binary_file(app.elf)
 
 # FLASH/RAM 用量可视化
-add_custom_command(TARGET fw.elf POST_BUILD
+add_custom_command(TARGET app.elf POST_BUILD
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tools/print_mem.py
-            $<TARGET_FILE:fw.elf> )
+            $<TARGET_FILE:app.elf> )
 
 # ==================== 签名 + full 镜像生成 ====================
-# imgtool 签名: fw.bin -> fw.signed.bin (MCUboot RSA-2048)
+# imgtool 签名: app.bin -> app.signed.bin (MCUboot RSA-2048)
 set(FW_KEY_PEM ${CMAKE_CURRENT_SOURCE_DIR}/tools/keys/root-rsa2048.pem)
 set(FW_VERSION "${FW_VERSION_MAJOR}.${FW_VERSION_MINOR}.${FW_VERSION_PATCH}")
-set(FW_SIGNED_BIN ${CMAKE_CURRENT_BINARY_DIR}/fw.signed.bin)
+set(APP_SIGNED_BIN ${CMAKE_CURRENT_BINARY_DIR}/app.signed.bin)
 set(FULL_BIN ${CMAKE_CURRENT_BINARY_DIR}/full.bin)
 set(FULL_HEX ${CMAKE_CURRENT_BINARY_DIR}/full.hex)
 
@@ -368,27 +368,27 @@ if(NOT IMGTOOL)
 endif()
 
 add_custom_command(
-    OUTPUT ${FW_SIGNED_BIN}
+    OUTPUT ${APP_SIGNED_BIN}
     COMMAND ${IMGTOOL} sign
-            ${CMAKE_CURRENT_BINARY_DIR}/fw.bin
-            ${FW_SIGNED_BIN}
+            ${CMAKE_CURRENT_BINARY_DIR}/app.bin
+            ${APP_SIGNED_BIN}
             --key ${FW_KEY_PEM}
             --header-size 512 --pad-header
             --align 8 --version ${FW_VERSION}
             --slot-size 0x70000 --max-sectors 120
             --erased-val 0xff
-    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/fw.bin ${FW_KEY_PEM}
-    COMMENT "imgtool sign -> fw.signed.bin"
+    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/app.bin ${FW_KEY_PEM}
+    COMMENT "imgtool sign -> app.signed.bin"
 )
 
-# full.bin = boot.bin + 0xFF 填充到 0x10000 + fw.signed.bin
+# full.bin = boot.bin + 0xFF 填充到 0x10000 + app.signed.bin
 add_custom_command(
     OUTPUT ${FULL_BIN}
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tools/merge_image.py
             ${CMAKE_CURRENT_BINARY_DIR}/boot.bin
-            ${FW_SIGNED_BIN} 65536 ${FULL_BIN}
-    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/boot.bin ${FW_SIGNED_BIN}
+            ${APP_SIGNED_BIN} 65536 ${FULL_BIN}
+    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/boot.bin ${APP_SIGNED_BIN}
             ${CMAKE_CURRENT_SOURCE_DIR}/tools/merge_image.py
     COMMENT "merge boot + padding + signed app -> full.bin"
 )
@@ -402,7 +402,7 @@ add_custom_command(
     COMMENT "objcopy -> full.hex"
 )
 
-add_custom_target(fw_sign ALL DEPENDS ${FW_SIGNED_BIN} ${FULL_HEX})
+add_custom_target(app_sign ALL DEPENDS ${APP_SIGNED_BIN} ${FULL_HEX})
 
 # ==================== 烧录目标 ====================
 find_program(STFLASH st-flash)
@@ -412,7 +412,7 @@ find_program(PYOCD pyocd)
 if(STFLASH)
     add_custom_target(flash
         COMMAND ${STFLASH} --reset write ${FULL_BIN} 0x8000000
-        DEPENDS fw_sign
+        DEPENDS app_sign
         USES_TERMINAL
         COMMENT "st-flash write full.bin -> 0x08000000"
     )
@@ -422,7 +422,7 @@ if(STLINK_CLI)
     add_custom_target(stlink_flash
         COMMAND ${STLINK_CLI} -c SWD SWCLK=4000 -P ${FULL_HEX} -V -Rst
         COMMAND ${STLINK_CLI} -c SWD SWCLK=4000 -Rst
-        DEPENDS fw_sign
+        DEPENDS app_sign
         USES_TERMINAL
         COMMENT "ST-LINK_CLI flash full.hex"
     )
@@ -431,7 +431,7 @@ endif()
 if(PYOCD)
     add_custom_target(pyocd_flash
         COMMAND ${PYOCD} flash -t stm32f407vetx ${FULL_HEX}
-        DEPENDS fw_sign
+        DEPENDS app_sign
         USES_TERMINAL
         COMMENT "pyocd flash full.hex"
     )

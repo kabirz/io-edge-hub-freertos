@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MCUboot 签名镜像离线校验 (模拟 boot 域 bootutil 的验证逻辑):
 header 解析 -> SHA256 TLV -> RSA2048 签名 (对 PEM 公钥)。
-用法: python3 tools/verify_image.py build-linux/fw.signed.bin \
+用法: python3 tools/verify_image.py build-linux/app.signed.bin \
           tools/keys/root-rsa2048.pem
 烧写失败时先跑本工具: PASS = 镜像本身没问题, 问题在烧写侧 (截断/地址);
 FAIL = 签名侧问题 (密钥不匹配 / imgtool 版本差异), 按提示处理。

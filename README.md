@@ -28,7 +28,7 @@ boot CAN 紧急救援)。协议帧格式与寄存器布局不变, Zephyr 版上�
 ## 目录结构
 
 ```
-CMakeLists.txt          双镜像构建: boot.elf (MCUboot 域) + fw.elf (app 域)
+CMakeLists.txt          双镜像构建: boot.elf (MCUboot 域) + app.elf (app 域)
 FreeRTOSConfig.h        FreeRTOS 内核配置 (168MHz / tick 1ms / 优先级 7 级 0-6, 当前用到 6)
 stm32f4xx_hal_conf.h    HAL 模块裁剪
 VERSION                 版本号 (当前 0.3.0)
@@ -97,7 +97,7 @@ cmake --build build
 ```
 
 产物:
-- `build/fw.bin` / `build/fw.signed.bin` — 应用固件
+- `build/app.bin` / `build/app.signed.bin` — 应用固件
 - `build/full.bin` / `build/full.hex` — 全片烧录 (boot + 签名 app)
 
 ## 烧录
@@ -109,7 +109,7 @@ cmake --build build --target pyocd_flash    # pyocd
 ```
 ```
 
-产物: `build/boot.elf` (MCUboot 引导, 裸机) + `build/fw.elf` (app, 链接在
+产物: `build/boot.elf` (MCUboot 引导, 裸机) + `build/app.elf` (app, 链接在
 slot0 镜像头之后, 不可直接烧录 —— 须经签名流水线)。
 
 Release 构建 (整体关闭日志, `LOG_*` 编译为空):
@@ -181,14 +181,14 @@ app 域: `boot_set_pending` 写 slot1 trailer 请求换机。
 ## 签名流水线与密钥
 
 签名已集成到 CMake 构建中, `cmake --build` 自动完成:
-`fw.bin` → imgtool 签名 → `fw.signed.bin` → 合并 boot + 填充 → `full.bin`/`full.hex`。
+`app.bin` → imgtool 签名 → `app.signed.bin` → 合并 boot + 填充 → `full.bin`/`full.hex`。
 
 ```bat
 python tools\gen_keys.py     & :: 首次生成 tools/keys/root-rsa2048.pem
 cmake --build build           & :: 编译 + 签名 (自动)
 ```
 
-- 构建时自动调用 imgtool 签名: `fw.bin` → `fw.signed.bin` (MCUboot RSA-2048)。
+- 构建时自动调用 imgtool 签名: `app.bin` → `app.signed.bin` (MCUboot RSA-2048)。
 - 私钥 `tools/keys/*.pem` 已被 .gitignore, **永不入库**。
 - 公钥指纹 (SHA256 of DER) 由 CMake 自动调用 `tools/gen_keyhash.py` 生成
   `build/generated/fw_keyhash.h`, 所有升级通道在擦 flash 前比对。

@@ -1,6 +1,6 @@
 # 上机验收清单 (FreeRTOS 移植一期)
 
-逐条勾选。目标固件: `phase1` 分支构建的 `fw.hex` (Debug 或 Release 均可,
+逐条勾选。目标固件: `phase1` 分支构建的 `app.hex` (Debug 或 Release 均可,
 日志项需 Debug 构建)。默认网络 `192.168.12.101/24`, Modbus TCP 端口
 502, UDP 配置端口 8600, RS485 9600 8N1 从站号 1, 日志串口 USART1
 115200。

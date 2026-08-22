@@ -8,7 +8,7 @@ Protocol matches the Zephyr io-edge-hub udp_fw_upgrade library:
 
 Usage:
   python tools/firmware_upgrade.py --ip 192.168.12.101 --src 192.168.12.150
-         -f build/fw.signed.bin
+         -f build/app.signed.bin
 """
 import argparse
 import socket

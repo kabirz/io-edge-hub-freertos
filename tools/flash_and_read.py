@@ -5,7 +5,7 @@ import threading
 import time
 
 STLINK = r"C:\Program Files (x86)\STMicroelectronics\STM32 ST-LINK Utility\ST-LINK Utility\ST-LINK_CLI.exe"
-HEX = r"C:\Users\jxwaz\code\io-edge-hub-freertos\build\fw.hex"
+HEX = r"C:\Users\jxwaz\code\io-edge-hub-freertos\build\app.hex"
 
 collected = bytearray()
 

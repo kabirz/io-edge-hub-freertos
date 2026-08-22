@@ -3,7 +3,7 @@
 Produces the complete translation unit expected by bootutil:
 bootutil_keys[] wrapper + rsa_pub_key[] (RSA public key, PKCS#1 DER)
 + rsa_pub_key_len, so the embedded key always matches the key that
-signed fw.signed.bin (single source of truth: tools/keys/*.pem).
+signed app.signed.bin (single source of truth: tools/keys/*.pem).
 
 Usage: python tools/gen_boot_keys.py <pem> <out.c>
 """
@@ -19,7 +19,7 @@ HEADER = '''\
  *
  * MCUboot 验签公钥 (RSA-2048 PKCS#1 DER)。构建时由
  * tools/gen_boot_keys.py 从签名私钥 pem 自动生成到构建目录,
- * 与 fw.signed.bin 的签名密钥保证配对。
+ * 与 app.signed.bin 的签名密钥保证配对。
  */
 
 #include <bootutil/sign_key.h>

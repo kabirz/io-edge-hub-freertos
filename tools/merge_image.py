@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""merge boot.bin + padding + fw.signed.bin -> full.bin"""
+"""merge boot.bin + padding + app.signed.bin -> full.bin"""
 import sys
 boot = open(sys.argv[1], 'rb').read()
 app = open(sys.argv[2], 'rb').read()

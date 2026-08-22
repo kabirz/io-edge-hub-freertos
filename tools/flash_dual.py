@@ -63,7 +63,7 @@ def main():
     if rc != 0:
         sys.exit(1)
     print("=== program fw ===")
-    rc = run(['-c', 'SWD', 'SWCLK=4000', '-P', BUILD + r'\fw.hex', '-V', '-Rst'])
+    rc = run(['-c', 'SWD', 'SWCLK=4000', '-P', BUILD + r'\app.hex', '-V', '-Rst'])
     if rc != 0:
         sys.exit(1)
     run(['-c', 'SWD', 'SWCLK=4000', '-Rst'])
