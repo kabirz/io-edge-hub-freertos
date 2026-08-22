@@ -21,6 +21,11 @@ void sys_init(void)
 
 err_t sys_mbox_new(sys_mbox_t *mb, int size)
 {
+    /* lwip 传入的 size 可能为 0 (未覆盖的 DEFAULT_*_MBOX_SIZE);
+     * 长度 0 的队列会触发 configASSERT, 兜底为 1 */
+    if (size < 1) {
+        size = 1;
+    }
     *mb = xQueueCreate((UBaseType_t)size, sizeof(void *));
     return (*mb == NULL) ? ERR_MEM : ERR_OK;
 }
@@ -56,6 +61,11 @@ int sys_mbox_valid(sys_mbox_t *mb)
     return (*mb != NULL) ? 1 : 0;
 }
 
+void sys_mbox_set_invalid(sys_mbox_t *mb)
+{
+    *mb = NULL;
+}
+
 u32_t sys_mbox_tryfetch(sys_mbox_t *mb, void **msg)
 {
     if (xQueueReceive(*mb, msg, 0) == pdTRUE) {
@@ -85,6 +95,28 @@ void sys_sem_signal(sys_sem_t *sem)
 err_t sys_sem_trywait(sys_sem_t *sem)
 {
     return xSemaphoreTake(*sem, 0) == pdTRUE ? ERR_OK : SYS_ARCH_TIMEOUT;
+}
+
+/* 带超时等待: 返回等待毫秒数, 超时 SYS_ARCH_TIMEOUT (netconn/sockets 用) */
+u32_t sys_arch_sem_wait(sys_sem_t *sem, u32_t timeout)
+{
+    TickType_t ticks = (timeout == 0) ? portMAX_DELAY : pdMS_TO_TICKS(timeout);
+    TickType_t t0 = xTaskGetTickCount();
+
+    if (xSemaphoreTake(*sem, ticks) == pdTRUE) {
+        return (u32_t)pdTICKS_TO_MS(xTaskGetTickCount() - t0);
+    }
+    return SYS_ARCH_TIMEOUT;
+}
+
+int sys_sem_valid(sys_sem_t *sem)
+{
+    return (*sem != NULL) ? 1 : 0;
+}
+
+void sys_sem_set_invalid(sys_sem_t *sem)
+{
+    *sem = NULL;
 }
 
 /* ---- mutex ---- */

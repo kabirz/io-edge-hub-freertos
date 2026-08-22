@@ -108,6 +108,7 @@ set(APP_SOURCES
     src/net/can.c
     src/net/udp_cfg.c
     src/net/udp_task.c
+    src/net/ftpd.c
     src/net/sys_arch.c
     src/io/dio.c
     src/io/adc.c
@@ -182,6 +183,11 @@ list(APPEND APP_SOURCES
     ${LWIP_DIR}/src/core/tcp_in.c
     ${LWIP_DIR}/src/core/tcp_out.c
     ${LWIP_DIR}/src/api/tcpip.c
+    ${LWIP_DIR}/src/api/netbuf.c
+    ${LWIP_DIR}/src/api/api_lib.c
+    ${LWIP_DIR}/src/api/api_msg.c
+    ${LWIP_DIR}/src/api/err.c
+    ${LWIP_DIR}/src/api/sockets.c
     ${LWIP_DIR}/src/core/timeouts.c
     ${LWIP_DIR}/src/core/udp.c
     ${LWIP_DIR}/src/core/ipv4/ip4.c
@@ -264,6 +270,11 @@ set_source_files_properties(
     ${LWIP_DIR}/src/core/tcp_in.c
     ${LWIP_DIR}/src/core/tcp_out.c
     ${LWIP_DIR}/src/api/tcpip.c
+    ${LWIP_DIR}/src/api/netbuf.c
+    ${LWIP_DIR}/src/api/api_lib.c
+    ${LWIP_DIR}/src/api/api_msg.c
+    ${LWIP_DIR}/src/api/err.c
+    ${LWIP_DIR}/src/api/sockets.c
     ${LWIP_DIR}/src/core/timeouts.c
     ${LWIP_DIR}/src/core/udp.c
     ${LWIP_DIR}/src/core/ipv4/ip4.c

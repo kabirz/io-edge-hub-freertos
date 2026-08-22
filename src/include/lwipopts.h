@@ -16,8 +16,9 @@
 
 /* ---- Platform ---- */
 #define NO_SYS                  0
-#define LWIP_NETCONN            0
-#define LWIP_SOCKET             0
+/* socket API (ftpd): netconn + select; httpd/mbtcp/udpcfg 仍走 raw 回调 */
+#define LWIP_NETCONN            1
+#define LWIP_SOCKET             1
 #define LWIP_CALLBACK_API       1
 #define LWIP_RAW                0
 #define LWIP_DHCP               0
@@ -26,6 +27,22 @@
 #define LWIP_IGMP               0
 #define LWIP_NETIF_STATUS_CALLBACK 0
 #define LWIP_NETIF_LINK_CALLBACK   0
+
+/* socket 选项: FTP 控制/数据连接收发超时 (select 循环依赖) */
+#define LWIP_SO_RCVTIMEO        1
+#define LWIP_SO_SNDTIMEO        1
+/* netconn 收包邮箱深度: lwip 默认全 0 (期望移植层覆盖), 0 会造成
+ * xQueueCreate(0) -> configASSERT 死循环 (曾在 FTP 首连冻结全系统) */
+#define DEFAULT_TCP_RECVMBOX_SIZE 6
+#define DEFAULT_ACCEPTMBOX_SIZE   6
+#define DEFAULT_UDP_RECVMBOX_SIZE 6
+/* struct timeval 用 newlib sys/time.h 的定义 (cc.h 已包含);
+ * lwip 自带的私有定义会与 newlib 冲突 */
+#define LWIP_TIMEVAL_PRIVATE    0
+/* fd_set 容量: 最多 10 socket 并发 (ftpd serv+3ctrl+3listen+3data) */
+#ifndef FD_SETSIZE
+#define FD_SETSIZE              16
+#endif
 
 /* ---- Timing ---- */
 #define LWIP_TIMERS             1
@@ -43,14 +60,16 @@
 
 #define MEMP_NUM_PBUF           16
 #define MEMP_NUM_RAW_PCB        0
-/* mbtcp 2 + httpd 2 并发 + 余量 (LISTEN 为独立池) */
-#define MEMP_NUM_TCP_PCB        8
-#define MEMP_NUM_TCP_PCB_LISTEN 2
+/* mbtcp 2 + httpd 2 + ftpd: 21 监听外的 3 控制 + 3 数据 + 余量
+ * (LISTEN 为独立池) */
+#define MEMP_NUM_TCP_PCB        14
+/* mbtcp + httpd + ftp:21 永久 + 3 个 PASV 监听 */
+#define MEMP_NUM_TCP_PCB_LISTEN 6
 /* httpd 流式发送多段在途 */
 #define MEMP_NUM_TCP_SEG        32
 #define MEMP_NUM_UDP_PCB        3   /* cfg + discover + margin */
-#define MEMP_NUM_NETBUF         0
-#define MEMP_NUM_NETCONN        0
+#define MEMP_NUM_NETBUF         16  /* socket recv netbuf (ftpd) */
+#define MEMP_NUM_NETCONN        12  /* ftpd: serv + 3ctrl + 3listen + 3data */
 #define MEMP_NUM_SYS_TIMEOUT    6
 
 /* ---- Pbuf ---- */
@@ -95,7 +114,10 @@
 #define LWIP_STATS              0
 
 /* ---- threading / sys ---- */
-#define LWIP_PROVIDE_ERRNO      1
+/* errno 走 newlib (<errno.h>, __errno() 可重入): LWIP_PROVIDE_ERRNO
+ * 须完全不定义 (errno.h 用 #ifdef 判定, 定义为 0 也算已定义);
+ * LWIP_ERRNO_STDINCLUDE 让 lwip/errno.h 直接包含 <errno.h> */
+#define LWIP_ERRNO_STDINCLUDE   1
 
 /* ---- dhcp / arp ---- */
 #define LWIP_ARP                1

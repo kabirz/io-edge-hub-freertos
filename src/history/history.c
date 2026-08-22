@@ -281,3 +281,26 @@ void history_web_usage(uint64_t *free_b, uint64_t *total_b)
 	}
 	xSemaphoreGive(hist_lock);
 }
+
+/* ==================== FTP 文件访问 (ftpd.c) ==================== */
+
+/* littlefs 挂载实例 (未挂载 NULL); ftpd 通用命令直接调 lfs API,
+ * 每次 lfs 操作单独持锁 (长传输分块之间放锁, 不饿死采样落盘) */
+lfs_t *history_fs(void)
+{
+	return hist_lfs;
+}
+
+void history_fs_lock(void)
+{
+	if (hist_lock != NULL) {
+		xSemaphoreTake(hist_lock, portMAX_DELAY);
+	}
+}
+
+void history_fs_unlock(void)
+{
+	if (hist_lock != NULL) {
+		xSemaphoreGive(hist_lock);
+	}
+}

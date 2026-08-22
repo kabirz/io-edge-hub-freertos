@@ -52,6 +52,13 @@ int history_web_remove(const char *name); /* 0 成功 */
 
 void history_web_usage(uint64_t *free_b, uint64_t *total_b); /* 字节, 未挂载 0/0 */
 
+/* ==================== FTP 通用文件访问 (ftpd.c) ====================
+ * littlefs 实例 + 共享串行锁: ftpd 直接调 lfs API, 每次 lfs 操作
+ * 单独持锁 (与 Web 下载同模式; 分块之间放锁不阻塞采样落盘) */
+lfs_t *history_fs(void);      /* 未挂载 NULL */
+void history_fs_lock(void);
+void history_fs_unlock(void);
+
 #ifdef __cplusplus
 }
 #endif

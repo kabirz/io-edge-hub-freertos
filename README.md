@@ -244,6 +244,28 @@ io> io save / io factory
 io 子命令写路径全部复用 `io_write_holding` / `io_write_do_bit`,
 与 Modbus/Web/UDP 副作用一致 (协议命令码与 Zephyr 版对齐)。
 
+## FTP 服务器 (端口 21)
+
+Zephyr 版 `src/ftp_server/ftpd.c` 的移植 (`src/net/ftpd.c`), 基于
+LwIP socket API (netconn 层随 FTP 启用, 见 `lwipopts.h`):
+
+- 单线程 select 多路复用, 最多 3 个并发客户端, 第 4 个回 421
+- `admin/admin` 全功能; `anonymous` 只读; 错误密码 530 拒绝
+- 命令: USER PASS SYST FEAT TYPE PWD CWD CDUP PORT PASV EPSV EPRT
+  LIST NLST RETR STOR APPE DELE MKD RMD RNFR RNTO SIZE REST NOOP QUIT
+- TYPE A/I (ASCII CR/LF 转换含跨块 \r 合并), REST 断点续传
+- 存储映射 littlefs 根 (history_fs 共享锁, 与采样落盘互斥;
+  每次 lfs 操作单独持锁, 长传输分块之间放锁)
+- ls -l 时间: `data_MMDD_HHMM[SS].raw` 解析文件名, 其余取 RTC
+- 120s 空闲超时; 控制/数据 socket 收发超时 10s/15s 防慢速客户端
+  冻结单线程服务
+- ftp 任务栈 8KB (实测峰值 ~4.2KB: 512B 行缓冲 + 512B 路径缓冲 +
+  日志链 newlib `_svfprintf_r` 深度)
+
+验收: 登录/LIST/STOR/RETR/APPE/SIZE/REST/重命名/目录/双客户端/
+匿名只读/错误密码拒绝 全部通过 (build/ftp_e2e.py); 主机测试 12/12
+与 1000 次 TCP 连接压力测试无回归。
+
 ## 烧录
 
 SWD (ST-Link / J-Link), 芯片内部 flash 基址 `0x08000000`。

@@ -44,6 +44,7 @@
 #include "fw_udp.h"       /* fw_udp_start */
 #include "fw_can.h"       /* fw_can_start / fw_can_frame_isr */
 #include "shell.h"        /* shell_start */
+#include "ftp.h"          /* ftpd_start */
 #include "wizchip_conf.h" /* getPHYCFGR / PHYCFGR_LNK_ON (boot 链路轮询) */
 
 #include "lwip/tcpip.h"   /* tcpip_init */
@@ -306,6 +307,7 @@ static void boot_task(void *arg)
     udp_cfg_start();
     fw_udp_start();
     web_httpd_start();
+    ftpd_start(); /* FTP (port 21, littlefs 根, history_fs 共享锁) */
 
     shell_start(); /* USART1 RX 中断 + shell 任务 (日志出就绪后) */
 
