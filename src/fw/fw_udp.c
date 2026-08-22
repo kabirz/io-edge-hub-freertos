@@ -35,6 +35,7 @@ void mcuboot_assert_fail(int line)
 {
 	LOG_ERR("mcuboot ASSERT L%d, rebooting", line);
 	vTaskDelay(pdMS_TO_TICKS(200));
+	log_flush(500); /* 复位前把异步日志刷出 */
 	NVIC_SystemReset();
 }
 

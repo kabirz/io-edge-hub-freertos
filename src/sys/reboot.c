@@ -17,6 +17,7 @@
 #include "task.h"
 
 #include "main.h"     /* NVIC_SystemReset (CMSIS) */
+#include "log.h"      /* log_flush (复位前排空异步日志队列) */
 #include "io_hooks.h" /* set/get_reboot_status 声明 */
 
 static volatile bool reboot_pending;
@@ -36,5 +37,6 @@ void io_reboot_cold(void)
 	/* vTaskDelay 需调度器运行 -- 全部调用点 (Modbus/UDP 任务) 皆任务
 	 * 上下文; 100ms 只为发送缓冲上线, 不复返回 */
 	vTaskDelay(pdMS_TO_TICKS(100));
+	log_flush(500); /* 异步日志队列排空, 否则复位带走尾部 */
 	NVIC_SystemReset();
 }

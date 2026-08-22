@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * 日志 (Zephyr LOG_MODULE_REGISTER/LOG_INF 等的最小对应物, Task 13):
- *   - USART1 115200 阻塞发送 (src/sys/log.c, target-only)
+ *   - USART1 115200 异步延迟打印 (src/sys/log.c, target-only): 调用
+ *     任务只格式化+入队 (µs 级) 不阻塞, 专职 logger 任务刷出; 4KB
+ *     环满丢弃新行并补报 "[W] N log lines dropped"
  *   - 格式 [HH:MM:SS.mmm][L] msg\r\n, 时钟 = epoch+8h 的一天内偏移
  *     + 当前秒内毫秒 (对齐 Zephyr 日志 +8 本地时区显示习惯)
  *   - LOG_ENABLE=0 时全部宏编译为空 (host 测试统一如此编译; 固件默认开,
@@ -46,8 +48,12 @@ void log_init(void);
  * 与 LOG_* 同一 UART、同一把锁 (行级不交织)。target-only */
 void log_line(const char *fmt, ...);
 
-/* 裸字节发送 (无 CRLF, 持同一把锁): shell 回显 / prompt。target-only */
+/* 裸字节发送 (无 CRLF): shell 回显 / prompt。target-only */
 void log_raw(const char *buf, uint16_t len);
+
+/* 等待队列排空 (上限 timeout_ms): NVIC_SystemReset 前调用, 否则
+ * 复位会带走未刷出的尾部日志。target-only */
+void log_flush(uint32_t timeout_ms);
 
 #ifdef __cplusplus
 }

@@ -213,6 +213,7 @@ static void handle_platform_rx(const uint8_t *data, uint8_t dlc)
         /* 对齐 Zephyr: 不应答, 短延迟后排空期重启 */
         LOG_INF("fwcan: reboot requested");
         vTaskDelay(pdMS_TO_TICKS(100));
+        log_flush(500); /* 复位前把异步日志刷出 */
         NVIC_SystemReset();
         break;
 
