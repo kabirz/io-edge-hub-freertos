@@ -162,7 +162,7 @@ wsl -e bash -c "cd /mnt/c/Users/jxwaz/code/io-edge-hub-freertos \
 
 `tests/e2e/` 面向真实设备, 覆盖基础连通 / 功能 / 压力三层
 (HTTP+WS / FTP / Modbus TCP+RTU / UDP 配置与固件升级 / 历史记录 /
-重启换机 / 串口 shell), 共 90 项。IP、串口等参数外部指定:
+重启换机 / 串口 shell), 共 92 项。IP、串口等参数外部指定:
 
 ```bat
 pip install -r tests\e2e\requirements.txt
