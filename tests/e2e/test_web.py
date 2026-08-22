@@ -173,8 +173,8 @@ def test_pipelined_requests(dev):
         s.sendall(req.encode())
         msgs = read_http_messages(s, 2)
         assert len(msgs) == 2, len(msgs)
-        assert "200" in msgs[0][0] and b'"t":"io"' in msgs[0][1]
-        assert "200" in msgs[1][0] and b'"t":"regs"' in msgs[1][1]
+        assert "200" in msgs[0][0] and b'"t":"io"' in msgs[0][2]
+        assert "200" in msgs[1][0] and b'"t":"regs"' in msgs[1][2]
     finally:
         s.close()
 

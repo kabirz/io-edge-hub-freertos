@@ -71,7 +71,7 @@ class Device:
 
 
 def http_on(sock, method, path, body=None, host="device"):
-    """Send one request on sock and read exactly one Content-Length response."""
+    """Send one request on sock and read exactly one response."""
     payload = body.encode() if isinstance(body, str) else body
     hdr = f"{method} {path} HTTP/1.1\r\nHost: {host}\r\n"
     if payload is not None:
@@ -81,51 +81,69 @@ def http_on(sock, method, path, body=None, host="device"):
     return read_http_message(sock)
 
 
-def read_http_message(sock):
-    buf = bytearray()
-    while b"\r\n\r\n" not in buf:
-        chunk = sock.recv(4096)
-        if not chunk:
-            raise ConnectionError(f"connection closed: {bytes(buf)!r}")
-        buf += chunk
-    head, _, rest = buf.partition(b"\r\n\r\n")
-    clen = 0
-    headers = {}
+def _try_extract(buf):
+    """尝试从 buf 解出一个完整响应 (Content-Length 或 chunked)。
+
+    返回 (status, headers, body, leftover) 或 None (数据不完整)。
+    """
+    head, sep, rest = bytes(buf).partition(b"\r\n\r\n")
+    if not sep:
+        return None
     lines = head.decode("latin-1").split("\r\n")
+    headers = {}
+    clen = 0
     for line in lines[1:]:
         k, _, v = line.partition(":")
-        headers[k.strip().lower()] = v.strip()
-        if k.strip().lower() == "content-length":
+        key = k.strip().lower()
+        headers[key] = v.strip()
+        if key == "content-length":
             clen = int(v.strip())
-    while len(rest) < clen:
-        chunk = sock.recv(4096)
-        if not chunk:
-            break
-        rest += chunk
-    return lines[0], headers, bytes(rest[:clen])
+    if headers.get("transfer-encoding", "").lower() == "chunked":
+        body = bytearray()
+        while True:
+            nl = rest.find(b"\r\n")
+            if nl < 0:
+                return None
+            line, rest = rest[:nl], rest[nl + 2:]
+            size = int(line.split(b";")[0].strip() or b"0", 16)
+            if size == 0:
+                if rest.startswith(b"\r\n"):
+                    rest = rest[2:]
+                return lines[0], headers, bytes(body), rest
+            if len(rest) < size + 2:
+                return None
+            body += rest[:size]
+            rest = rest[size + 2:]
+    if len(rest) < clen:
+        return None
+    return lines[0], headers, rest[:clen], rest[clen:]
+
+
+def read_http_message(sock):
+    msgs = read_http_messages(sock, 1)
+    if not msgs:
+        raise ConnectionError(f"no response; buffer incomplete")
+    return msgs[0]
 
 
 def read_http_messages(sock, count):
-    """Read `count` pipelined responses from sock."""
+    """Read up to `count` pipelined responses from sock."""
     buf = bytearray()
     msgs = []
     while len(msgs) < count:
+        while len(msgs) < count:
+            r = _try_extract(bytes(buf))
+            if r is None:
+                break
+            status, headers, body, rest = r
+            msgs.append((status, headers, body))
+            buf = bytearray(rest)
+        if len(msgs) >= count:
+            break
         chunk = sock.recv(4096)
         if not chunk:
             break
         buf += chunk
-        while len(msgs) < count:
-            head, sep, rest = bytes(buf).partition(b"\r\n\r\n")
-            if not sep:
-                break
-            clen = 0
-            for line in head.split(b"\r\n")[1:]:
-                if line.lower().startswith(b"content-length:"):
-                    clen = int(line.split(b":")[1])
-            if len(rest) < clen:
-                break
-            msgs.append((head.decode("latin-1").split("\r\n")[0], rest[:clen]))
-            buf = rest[clen:]
     return msgs
 
 
