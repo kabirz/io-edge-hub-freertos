@@ -92,11 +92,14 @@ static void macraw_recv_commit(void)
     }
 }
 
-/* 重开 MACRAW socket (须持有 spi_lock); 用于初始化和失步恢复 */
+/* 重开 MACRAW socket (须持有 spi_lock); 用于初始化和失步恢复。
+ * 重开须重设 Sn_IMR: 坏头恢复不能让 SENDOK 中断混进 INT 线。 */
 static void macraw_open_socket(void)
 {
     close(MACRAW_SN);
     socket(MACRAW_SN, Sn_MR_MACRAW, 0, SF_ETHER_OWN | SF_MULTI_BLOCK);
+    setSn_IR(MACRAW_SN, 0x1F);	   /* 清历史挂起 */
+    setSn_IMR(MACRAW_SN, Sn_IR_RECV); /* INT 只由收包触发 */
 }
 
 /* ==================== Low-level: init / output / input ==================== */
@@ -115,6 +118,9 @@ static void low_level_init(struct netif *netif)
 
     macraw_lock();
     macraw_open_socket();
+    /* INT 引脚总开关: SIMR 复位默认 0x00, 不置位则收包永远不拉低
+     * INT (旧版"EXTI 不可靠"即此因, 曾退化为 10ms 轮询) */
+    setSIMR(0x01u << MACRAW_SN);
     uint8_t sr = getSn_SR(MACRAW_SN);
     uint8_t mr = getSn_MR(MACRAW_SN);
     macraw_unlock();
@@ -124,7 +130,7 @@ static void low_level_init(struct netif *netif)
         LOG_ERR("MACRAW: socket open failed (SR=0x%02x)", sr);
         return;
     }
-    LOG_INF("MACRAW: socket 0 open, 16KB RX/TX, filter=own+bcast");
+    LOG_INF("MACRAW: socket 0 open, 16KB RX/TX, filter=own+bcast, int=recv");
 }
 
 static err_t low_level_output(struct netif *netif, struct pbuf *p)
@@ -254,7 +260,9 @@ static void macraw_rx_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(10)); /* 轮询 (EXTI 在当前板上不可靠) */
+        /* EXTI 事件唤醒 (INT 低有效, 收包即拉低); 10ms 超时兜底
+         * (INT 未使能/未接线时退化为原轮询, 行为不劣于旧版) */
+        (void)xSemaphoreTake(rx_sem, pdMS_TO_TICKS(10));
 
         if (getSn_RX_RSR(MACRAW_SN) == 0) {
             continue;
@@ -270,6 +278,15 @@ static void macraw_rx_task(void *arg)
                 pbuf_free(p);
             }
         }
+
+        /* INT 为电平保持: 清 RECV 中断源释放 INT 线, 下一包才有新下降沿。
+         * 清后若仍有积压 (清与收包的竞态), 自我唤醒立即再收。 */
+        macraw_lock();
+        setSn_IR(MACRAW_SN, Sn_IR_RECV);
+        if (getSn_RX_RSR(MACRAW_SN) != 0) {
+            xSemaphoreGive(rx_sem);
+        }
+        macraw_unlock();
     }
 }
 
@@ -295,9 +312,7 @@ bool w5500_macraw_init(const uint8_t mac[6])
     io.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(W5500_INT_PORT, &io);
     HAL_NVIC_SetPriority(EXTI1_IRQn, 6, 0);
-    HAL_NVIC_EnableIRQ(EXTI1_IRQn);
-
-    IP4_ADDR(&ip_addr,
+    HAL_NVIC_EnableIRQ(EXTI1_IRQn);    IP4_ADDR(&ip_addr,
              (uint8_t)get_holding_reg(HOLDING_IP_OCTET1_IDX),
              (uint8_t)get_holding_reg(HOLDING_IP_OCTET2_IDX),
              (uint8_t)get_holding_reg(HOLDING_IP_OCTET3_IDX),
