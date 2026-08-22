@@ -21,16 +21,17 @@ const struct io_flash *w25qxx_flash(void)
     return fake_flash_get();
 }
 
-/* ============ 参考实现 (Zephyr crc16_ccitt 逐式) ============ */
+/* ============ 参考实现 (Zephyr crc16_ccitt 逐式: 反射 nibble, poly
+ * 0x8408 -- zephyr/subsys/crc/crc16_sw.c; 旧版误用的字节交换形式是
+ * Zephyr 的 crc16_itu_t/XMODEM, 41372ae 已对齐) ============ */
 
 static uint16_t ref_crc16(uint16_t seed, const uint8_t *src, uint32_t len)
 {
     while (len-- > 0) {
-        seed = (uint16_t)((seed >> 8) | (seed << 8));
-        seed ^= *src++;
-        seed ^= (uint16_t)((seed & 0xFFu) >> 4);
-        seed ^= (uint16_t)(seed << 12);
-        seed ^= (uint16_t)((seed & 0xFFu) << 5);
+        uint8_t e = (uint8_t)(seed ^ *src++);
+        uint8_t f = (uint8_t)(e ^ (e << 4));
+        seed = (uint16_t)((seed >> 8) ^ ((uint16_t)f << 8) ^
+                          ((uint16_t)f << 3) ^ (f >> 4));
     }
     return seed;
 }
@@ -100,11 +101,11 @@ int main(void)
 
     fake_flash_reset();
 
-    /* ---- CRC16-CCITT 已知答案 ("123456789" -> 0x31C3) ---- */
+    /* ---- CRC16 已知答案 ("123456789" -> 0x2189, KERMIT) ---- */
     {
         const char *kat = "123456789";
 
-        TEST_ASSERT(ref_crc16(0, (const uint8_t *)kat, 9) == 0x31C3);
+        TEST_ASSERT(ref_crc16(0, (const uint8_t *)kat, 9) == 0x2189);
     }
 
     /* ---- 参数边界 ---- */
