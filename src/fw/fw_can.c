@@ -26,6 +26,7 @@
 #include "fw_can.h"
 #include "fw_upg.h"
 #include "fw_version.h"
+#include "history.h" /* history_sync (升级重启前刷采样缓存) */
 #include "io_can.h"
 #include "log.h"
 
@@ -214,6 +215,7 @@ static void handle_platform_rx(const uint8_t *data, uint8_t dlc)
         LOG_INF("fwcan: reboot requested");
         vTaskDelay(pdMS_TO_TICKS(100));
         log_flush(500); /* 复位前把异步日志刷出 */
+        history_sync(); /* 升级重启前刷采样缓存 (与 ws/udp/shell 路径一致) */
         NVIC_SystemReset();
         break;
 

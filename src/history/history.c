@@ -204,6 +204,9 @@ int history_web_open(const char *name)
 	int rc = -1;
 
 	xSemaphoreTake(hist_lock, portMAX_DELAY);
+	/* 下载前刷采样缓存 (对齐 Zephyr /api/history/download 先
+	 * history_sync 再打开): 当前文件末尾的最新采样可见 */
+	hist_file_sync();
 	if (!web_fp_open && lfs_file_open(hist_lfs, &web_fp, name,
 					  LFS_O_RDONLY) == 0) {
 		lfs_soff_t size = lfs_file_size(hist_lfs, &web_fp);
