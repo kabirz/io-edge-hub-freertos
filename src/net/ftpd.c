@@ -2,19 +2,15 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * FTP server (RFC 959, 单线程 select, 最多 3 客户端)
- * — Zephyr 版 src/ftp_server/ftpd.c 的 FreeRTOS/LwIP 移植:
- *   - PASV 被动 + PORT 主动数据连接 (EPSV/EPRT 扩展)
- *   - TYPE A (ASCII CR/LF 转换, 跨块 \r 合并) / TYPE I (二进制)
- *   - select 多路复用控制命令; RETR/STOR/LIST 传输时该会话独占
- *   - 120s 空闲超时; 路径规范化(.. 防护); LIST 标准 Unix ls -l
- *   - 命令: USER PASS SYST FEAT TYPE PWD CWD CDUP PORT PASV EPSV EPRT
- *            LIST NLST RETR STOR APPE DELE MKD RMD RNFR RNTO SIZE REST
- *            NOOP ALLO QUIT
- *   - 存储映射 littlefs 根 (history_fs()); 每次 lfs 操作单独持
- *     history_fs_lock (与采样落盘互斥, 长传输分块之间放锁)
- *   - Zephyr 差异: sscanf 全部换 strtoul/手工解析 (省 newlib scanf);
- *     ls -l 时间取 io_now_epoch (RTC); admin 之外的 anonymous 只读
+ * FTP server (RFC 959, 单线程 select, 最多 3 客户端), Zephyr 版
+ * src/ftp_server/ftpd.c 的移植。
+ *   - PASV/EPSV 被动 + PORT/EPRT 主动数据连接
+ *   - TYPE A (ASCII CR/LF 转换, 跨块 \r 合并) / TYPE I 二进制
+ *   - RETR/STOR/LIST 传输期间该会话独占 FTP 线程
+ *   - 120s 空闲超时; 路径规范化含 .. 防护; LIST 输出 Unix ls -l
+ *   - 存储 = littlefs 根 (history_fs 共享锁, 每次 lfs 操作单独持锁,
+ *     长传输分块之间放锁)
+ *   - admin/admin 全功能, anonymous 只读
  */
 
 #include <errno.h>
@@ -38,7 +34,7 @@
 
 #include "ftp.h"
 #include "history.h" /* history_fs/_lock/_unlock, history_sync */
-#include "io_time.h" /* ls -l 时间 (RTC epoch) */
+#include "io_time.h" /* ls -l 时间取 RTC epoch */
 #include "log.h"
 
 #define FTP_MAX_CLIENTS         3
@@ -201,7 +197,6 @@ static void norm_path(char *out, size_t outlen, const char *cwd,
 	out[pos] = '\0';
 }
 
-/* littlefs 路径 = 规范化路径 (FTP_ROOT 为空, fs 以 / 为根) */
 static void fs_path(char *out, size_t outlen, const char *cwd,
 		    const char *client_path)
 {
@@ -261,7 +256,7 @@ static const char *const ftp_months[] = {"Jan", "Feb", "Mar", "Apr",
 					 "Sep", "Oct", "Nov", "Dec"};
 
 /* 历史文件名 data_MMDD_HHMM[SS].raw -> 真实创建时间 (lfs 无 mtime);
- * 对齐 Zephyr sscanf("%2u%2u_%2u%2u"): 尾部多余数字 (秒) 忽略 */
+ * 尾部多余数字 (秒) 忽略 */
 static bool parse_hist_time(const char *name, int *mon, int *day, int *hour,
 			    int *min)
 {
@@ -324,12 +319,12 @@ static void format_ls_time(char *out, size_t len, const char *name)
 	}
 }
 
-static void cmd_pasv(struct ftp_session *s)
+/* PASV/EPSV 共用: 关旧监听, 新建 bind(:0)+listen(1) 的数据监听 socket。
+ * 返回 0 成功 (*port 回填本地端口) / -1 socket 失败 / -2 bind 失败 */
+static int data_listen_open(struct ftp_session *s, uint16_t *port)
 {
 	struct sockaddr_in addr;
-	socklen_t alen;
-	uint8_t ip[4];
-	uint16_t port;
+	socklen_t alen = sizeof(addr);
 
 	if (s->data_listen >= 0) {
 		lwip_close(s->data_listen);
@@ -337,10 +332,8 @@ static void cmd_pasv(struct ftp_session *s)
 	s->data_is_port = false;
 	s->data_listen = lwip_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (s->data_listen < 0) {
-		ftp_send(s->ctrl, "425 Cannot open passive connection");
-		return;
+		return -1;
 	}
-
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
 	addr.sin_addr.s_addr = PP_HTONL(INADDR_ANY);
@@ -350,50 +343,43 @@ static void cmd_pasv(struct ftp_session *s)
 	    lwip_listen(s->data_listen, 1) < 0) {
 		lwip_close(s->data_listen);
 		s->data_listen = -1;
-		ftp_send(s->ctrl, "425 Passive bind failed");
+		return -2;
+	}
+	(void)lwip_getsockname(s->data_listen, (struct sockaddr *)&addr, &alen);
+	*port = ntohs(addr.sin_port);
+	return 0;
+}
+
+static void cmd_pasv(struct ftp_session *s)
+{
+	uint8_t ip[4];
+	uint16_t port;
+	int rc = data_listen_open(s, &port);
+
+	if (rc != 0) {
+		ftp_send(s->ctrl, rc == -2 ? "425 Passive bind failed"
+					    : "425 Cannot open passive connection");
 		return;
 	}
-
-	alen = sizeof(addr);
-	(void)lwip_getsockname(s->data_listen, (struct sockaddr *)&addr, &alen);
-	port = ntohs(addr.sin_port);
 	get_local_ip(ip);
 	ftp_sendf(s->ctrl,
 		  "227 Entering Passive Mode (%u,%u,%u,%u,%u,%u)", ip[0],
 		  ip[1], ip[2], ip[3], (port >> 8) & 0xFF, port & 0xFF);
 }
 
-/* EPSV: 扩展被动模式 (RFC 2428), 回 229 (|||port|) */
+/* EPSV (RFC 2428): 回 229 (|||port|) */
 static void cmd_epsv(struct ftp_session *s)
 {
-	struct sockaddr_in addr;
-	socklen_t alen;
+	uint16_t port;
+	int rc = data_listen_open(s, &port);
 
-	if (s->data_listen >= 0) {
-		lwip_close(s->data_listen);
-	}
-	s->data_is_port = false;
-	s->data_listen = lwip_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (s->data_listen < 0) {
-		ftp_send(s->ctrl, "425 Cannot open passive connection");
+	if (rc != 0) {
+		ftp_send(s->ctrl, rc == -2 ? "425 Passive bind failed"
+					   : "425 Cannot open passive connection");
 		return;
 	}
-	memset(&addr, 0, sizeof(addr));
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = PP_HTONL(INADDR_ANY);
-	addr.sin_port = 0;
-	if (lwip_bind(s->data_listen, (struct sockaddr *)&addr,
-		      sizeof(addr)) < 0 ||
-	    lwip_listen(s->data_listen, 1) < 0) {
-		lwip_close(s->data_listen);
-		s->data_listen = -1;
-		ftp_send(s->ctrl, "425 Passive bind failed");
-		return;
-	}
-	alen = sizeof(addr);
-	(void)lwip_getsockname(s->data_listen, (struct sockaddr *)&addr, &alen);
 	ftp_sendf(s->ctrl, "229 Entering Extended Passive Mode (|||%u|)",
-		  ntohs(addr.sin_port));
+		  port);
 }
 
 /* PORT h1,h2,h3,h4,p1,p2 -> 主动模式目标地址 */
