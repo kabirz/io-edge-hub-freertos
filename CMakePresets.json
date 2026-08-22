@@ -1,0 +1,84 @@
+{
+    "version": 7,
+    "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "linux-debug",
+            "displayName": "Linux Debug (system arm-none-eabi)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "linux-release",
+            "displayName": "Linux Release (system arm-none-eabi)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "APP_RELEASE": "ON"
+            }
+        },
+        {
+            "name": "windows-debug",
+            "displayName": "Windows Debug (Zephyr SDK)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "STM32_TOOLCHAIN_PATH": "$env{ZEPHYR_SDK}/arm-zephyr-eabi",
+                "STM32_TARGET_TRIPLET": "arm-zephyr-eabi"
+            }
+        },
+        {
+            "name": "windows-release",
+            "displayName": "Windows Release (Zephyr SDK)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "APP_RELEASE": "ON",
+                "STM32_TOOLCHAIN_PATH": "$env{ZEPHYR_SDK}/arm-zephyr-eabi",
+                "STM32_TARGET_TRIPLET": "arm-zephyr-eabi"
+            }
+        }
+    ],
+    "buildPresets": [
+        { "name": "linux-debug",   "configurePreset": "linux-debug",   "configuration": "Debug" },
+        { "name": "linux-release", "configurePreset": "linux-release", "configuration": "Release" },
+        { "name": "windows-debug",   "configurePreset": "windows-debug",   "configuration": "Debug" },
+        { "name": "windows-release", "configurePreset": "windows-release", "configuration": "Release" }
+    ],
+    "workflowPresets": [
+        {
+            "name": "linux-debug",
+            "steps": [
+                { "type": "configure", "name": "linux-debug" },
+                { "type": "build",     "name": "linux-debug" }
+            ]
+        },
+        {
+            "name": "linux-release",
+            "steps": [
+                { "type": "configure", "name": "linux-release" },
+                { "type": "build",     "name": "linux-release" }
+            ]
+        },
+        {
+            "name": "windows-debug",
+            "steps": [
+                { "type": "configure", "name": "windows-debug" },
+                { "type": "build",     "name": "windows-debug" }
+            ]
+        },
+        {
+            "name": "windows-release",
+            "steps": [
+                { "type": "configure", "name": "windows-release" },
+                { "type": "build",     "name": "windows-release" }
+            ]
+        }
+    ]
+}

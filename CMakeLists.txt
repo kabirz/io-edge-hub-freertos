@@ -331,9 +331,14 @@ target_link_libraries(fw.elf PRIVATE
     STM32::F407xx
     STM32::NoSys
 )
-stm32_print_size_of_target(fw.elf)
 stm32_generate_hex_file(fw.elf)
 stm32_generate_binary_file(fw.elf)
+
+# FLASH/RAM 用量可视化
+add_custom_command(TARGET fw.elf POST_BUILD
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/print_mem.py
+            $<TARGET_FILE:fw.elf> )
 
 # ==================== 签名 + full 镜像生成 ====================
 # imgtool 签名: fw.bin -> fw.signed.bin (MCUboot RSA-2048)
@@ -527,6 +532,11 @@ target_link_libraries(boot.elf PRIVATE
     STM32::NoSys
 )
 gen_ld_script(boot.elf boot 0x8000000 64K)
-stm32_print_size_of_target(boot.elf)
 stm32_generate_hex_file(boot.elf)
 stm32_generate_binary_file(boot.elf)
+
+# FLASH/RAM 用量可视化
+add_custom_command(TARGET boot.elf POST_BUILD
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/print_mem.py
+            $<TARGET_FILE:boot.elf> )

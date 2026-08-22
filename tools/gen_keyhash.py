@@ -25,7 +25,6 @@ def main():
         f.write('static const unsigned char fw_keyhash[32] = {\n    ')
         f.write(', '.join('0x%02x' % b for b in kh))
         f.write(',\n};\n\n#endif /* FW_KEYHASH_H */\n')
-    print('keyhash:', kh.hex())
 
 
 if __name__ == '__main__':

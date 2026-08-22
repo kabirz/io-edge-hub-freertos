@@ -68,6 +68,17 @@ git -C deps/mcuboot submodule update --init ext/mbedtls
 
 ## 固件构建
 
+**推荐方式 (CMakePresets)**:
+
+```bash
+cmake --workflow --preset linux-debug      # Linux Debug
+cmake --workflow --preset linux-release    # Linux Release
+cmake --workflow --preset windows-debug    # Windows Debug (需设置 ZEPHYR_SDK)
+cmake --workflow --preset windows-release  # Windows Release
+```
+
+**手动构建 (Linux)**:
+
 ```bash
 cmake -B build -G Ninja
 cmake --build build
@@ -76,7 +87,7 @@ cmake --build build
 工具链优先级: 系统 arm-none-eabi (默认) > 环境变量 STM32_TOOLCHAIN_PATH > Zephyr SDK。
 签名在构建时自动完成 (需 `tools/keys/root-rsa2048.pem` + `pip install imgtool`)。
 
-Windows 需指定工具链:
+**手动构建 (Windows)**:
 
 ```bat
 cmake -B build -G Ninja ^
