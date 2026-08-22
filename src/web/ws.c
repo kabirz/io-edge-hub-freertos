@@ -242,16 +242,19 @@ static int b64_decode(const char *src, uint32_t len, uint8_t *dst,
     return (int)o;
 }
 
-/* ==================== CRC16-CCITT (fw 数据帧累加) ==================== */
+/* ==================== CRC16 (fw 数据帧累加) ==================== */
 
+/* Zephyr crc16_ccitt 逐式 (反射 nibble, poly 0x8408 --
+ * zephyr/subsys/crc/crc16_sw.c)。须与 fw_upg.c 内部累加一致:
+ * fw_end 传入的接收侧 CRC 与固件侧读回 CRC 对比, 算法不一致则
+ * 恒 mismatch (41372ae 对齐 fw_upg.c 时本函数漏改, 致 WS 升级失败) */
 static uint16_t ws_crc16(uint16_t seed, const uint8_t *src, uint32_t len)
 {
     while (len-- > 0) {
-        seed = (uint16_t)((seed >> 8) | (seed << 8));
-        seed ^= *src++;
-        seed ^= (uint16_t)((seed & 0xFFu) >> 4);
-        seed ^= (uint16_t)(seed << 12);
-        seed ^= (uint16_t)((seed & 0xFFu) << 5);
+        uint8_t e = (uint8_t)(seed ^ *src++);
+        uint8_t f = (uint8_t)(e ^ (e << 4));
+        seed = (uint16_t)((seed >> 8) ^ ((uint16_t)f << 8) ^
+                          ((uint16_t)f << 3) ^ (f >> 4));
     }
     return seed;
 }
