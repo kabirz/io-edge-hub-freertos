@@ -304,6 +304,10 @@ set_source_files_properties(
     ${BOOT_PORT_DIR}/flash_map_backend.c
     ${BOOTUTIL_DIR}/src/bootutil_public.c
     PROPERTIES COMPILE_OPTIONS "-w")
+set_source_files_properties(
+    deps/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash_ex.c
+    PROPERTIES
+    COMPILE_OPTIONS "-Wno-unused-parameter")
 target_link_libraries(fw.elf PRIVATE
     FreeRTOS::ARM_CM4F
     FreeRTOS::Heap::4
@@ -440,6 +444,7 @@ set(BOOT_SOURCES
     src/boot/boot_can.c
     src/board/board.c
     src/board/spi.c
+    src/sys/syscalls.c
     src/board/stm32f4xx_hal_timebase_tim.c
     src/storage/w25qxx.c
     src/storage/intflash.c
