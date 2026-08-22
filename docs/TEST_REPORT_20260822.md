@@ -82,8 +82,9 @@ Zephyr chunked + 完整 TCP 栈开销); **FTP** 上传同为 NOR 写入瓶颈
   损坏区内容在原文件后部重现 —— 即字节被**跳过**
 - 根因: `send()` 在 TX 缓冲紧张时只接受部分字节, 原代码忽略返回值,
   尾部字节静默丢失 (存储与 littlefs 完好, web 下载逐字节一致可证)
-- 修复: 数据连接全部改走重试到发完的 `send_all()`; 同时 RETR 读缓冲
-  改静态、FTP 线程栈 4096→8192 (深调用链下原栈已越界, 属加固)
+- 修复: 数据连接全部改走重试到发完的 `send_all()`; RETR 读缓冲改静态。
+  FTP 线程栈经 `kernel thread stacks` 实测峰值 2904B, 维持原 4096
+  (一度试改 8192 把主 SRAM 推到 95.2%, 实测后回收, 回到 92.2%)
 - 复验: 1MB×3 轮逐字节一致, stress FTP 3 并发 + 1MB md5 全过
 
 ### 6.2 双向同步 (保证 web/FTP/Modbus/升级四域一致)
@@ -119,6 +120,10 @@ Zephyr chunked + 完整 TCP 栈开销); **FTP** 上传同为 NOR 写入瓶颈
   重启前抢答, 20s swap 落到下一模块 —— 现先等离线再等回线
 - 两版 `web /api/time` 超 int32 时间戳均被 strtol 钳到 2038 (行为一致,
   与 Zephyr 原版相同); 版本串均为构建期注入
+- RAM 余量核查: Zephyr littlefs 挂载/首次格式化需 malloc 2×1024+32≈2.1KB
+  (每打开一个文件再 +1KB), 走 k_malloc 的**固定 16KB 系统堆**
+  (CONFIG_HEAP_MEM_POOL_SIZE, 已计入 .bss 统计), 不受"主 SRAM 95%"影响;
+  挂载发生在 SYS_INIT 早期 (网络服务启动前), 堆占用极低, 无失败风险
 
 ## 7. 收尾状态
 
