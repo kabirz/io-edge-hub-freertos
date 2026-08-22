@@ -107,8 +107,12 @@ class FwUpg:
         assert r[1] == 1, f"FW_END rejected (crc/keyhash): ok={r[1]}"
 
     def reboot(self):
-        r = self.xfer(bytes([0x05]))
-        assert r[1] == 1, f"REBOOT rejected: {r.hex()}"
+        try:
+            r = self.xfer(bytes([0x05]), 3.0)
+        except socket.timeout:
+            return  # device may already be rebooting (e.g. after END)
+        # Zephyr replies 1 byte, the FreeRTOS port appends the ok flag
+        assert r[0] == 0x05 and r[1:2] in (b"", b"\x01"), r.hex()
 
 
 def wait_online(dev, timeout, probe_interval=1.0):

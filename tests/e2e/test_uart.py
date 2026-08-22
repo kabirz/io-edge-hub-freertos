@@ -8,6 +8,13 @@ pytestmark = [pytest.mark.functional, pytest.mark.serial]
 PROMPT = b"io> "
 
 
+@pytest.fixture(autouse=True)
+def freertos_only(fw_kind):
+    if fw_kind != "freertos":
+        pytest.skip("io> shell is FreeRTOS-port specific "
+                    "(Zephyr uses the stock Zephyr shell)")
+
+
 def test_prompt_and_help(uart):
     drain(uart)
     uart.write(b"\n")

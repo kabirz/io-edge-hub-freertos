@@ -10,7 +10,7 @@ import time
 import pytest
 import websocket
 
-from helpers.device import parse_version
+from helpers.device import parse_version, wait_http_json
 from helpers.fwupd import FwUpg, keyhash_from_image, wait_online
 
 pytestmark = [pytest.mark.functional, pytest.mark.upgrade]
@@ -49,7 +49,7 @@ def test_upgrade_same_image(dev, fw_image):
     version_after = wait_online(dev, 120)
     assert version_after == version_before, (version_before, version_after)
 
-    _, info = dev.http_json("GET", "/api/info")
+    info = wait_http_json(dev)
     assert info["uptime_ms"] < 120_000, info["uptime_ms"]
     dev.tcp(21).close()  # 服务恢复
 
@@ -96,5 +96,5 @@ def test_upgrade_over_ws(dev, fw_image):
         ws.close()
 
     assert wait_online(dev, 120) == version_before
-    _, info = dev.http_json("GET", "/api/info")
+    info = wait_http_json(dev)
     assert info["uptime_ms"] < 120_000, info["uptime_ms"]

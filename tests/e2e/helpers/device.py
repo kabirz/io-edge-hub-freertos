@@ -8,6 +8,7 @@ import json
 import re
 import socket
 import subprocess
+import time
 
 UDP_CFG_PORT = 8600
 HTTP_PORT = 80
@@ -145,6 +146,20 @@ def read_http_messages(sock, count):
             break
         buf += chunk
     return msgs
+
+
+def wait_http_json(dev, path="/api/info", timeout=30):
+    """Retry /api/info style GETs while services come up after a reboot."""
+    deadline = time.time() + timeout
+    while True:
+        try:
+            st, r = dev.http_json("GET", path, timeout=3.0)
+            assert "200" in st, st
+            return r
+        except Exception:
+            if time.time() > deadline:
+                raise
+            time.sleep(1.0)
 
 
 def parse_version(udp_reply):

@@ -44,6 +44,13 @@ def dev(request):
 
 
 @pytest.fixture(scope="session")
+def fw_kind(dev):
+    """"freertos" or "zephyr" — /api/info board carries the Zephyr hwmq tail."""
+    _, info = dev.http_json("GET", "/api/info")
+    return "zephyr" if "/" in info["board"] else "freertos"
+
+
+@pytest.fixture(scope="session")
 def ftp_creds(request):
     return request.config.getoption("--ftp-user"), \
         request.config.getoption("--ftp-pass")

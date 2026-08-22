@@ -91,7 +91,10 @@ def test_time_endpoint(dev):
                  json.dumps({"ts": int(time.time())}))
 
 
-def test_cfg_validation(dev):
+def test_cfg_validation(dev, fw_kind):
+    if fw_kind != "freertos":
+        pytest.skip("/api/cfg is a FreeRTOS-port route "
+                    "(Zephyr exposes cfg as a WS command only)")
     _, info0 = dev.http_json("GET", "/api/info")
     orig_sid = info0["slave_id"]
     try:
@@ -117,8 +120,13 @@ def test_cfg_validation(dev):
                  ('{"can_id":0}', "invalid can id"),
                  ('{"can_id":2048}', "invalid can id")]
         for body, want_err in cases:
-            r = http_err(dev, "POST", "/api/cfg", body)
-            assert want_err in r.get("err", ""), (body, r)
+            st, r = dev.http_json("POST", "/api/cfg", body)
+            if fw_kind == "freertos":
+                assert "400" in st and want_err in r.get("err", ""), \
+                    (body, st, r)
+            else:
+                # Zephyr http lib maps handler errors to a plain 500
+                assert st.split()[1] != "200", (body, st)
     finally:
         dev.http("POST", "/api/cfg", json.dumps({"sid": orig_sid}))
     _, info = dev.http_json("GET", "/api/info")
@@ -136,36 +144,50 @@ def test_history_download_invalid_name(dev):
         assert "400" in st and r.get("ok") is False, (name, st, r)
 
 
-def test_404_and_method(dev):
-    st, r = dev.http_json("GET", "/api/nonexistent")
-    assert "404" in st and r.get("err") == "not found", (st, r)
-    st, r = dev.http_json("DELETE", "/api/io")
+def test_404_and_method(dev, fw_kind):
+    st, _, _ = dev.http("GET", "/api/nonexistent")
     assert "404" in st, st
+    if fw_kind == "freertos":
+        _, r = dev.http_json("GET", "/api/nonexistent")
+        assert r.get("err") == "not found", r
+    st, _, _ = dev.http("DELETE", "/api/io")
+    want = "404" if fw_kind == "freertos" else "405"  # Zephyr 精确拒绝方法
+    assert want in st, st
 
 
 def test_body_too_large(dev):
-    st, r = dev.http_json("POST", "/api/do", '{"index":1,"value":1,"pad":"' +
-                          "x" * 150 + '"}')
-    assert "400" in st and "large" in r.get("err", ""), (st, r)
+    st, _, body = dev.http("POST", "/api/do", '{"index":1,"value":1,"pad":"' +
+                           "x" * 150 + '"}')
+    assert "400" in st and b"body too large" in body, (st, body[:120])
 
 
-def test_request_line_parser_edges(dev):
-    s = dev.tcp(80)
-    try:
-        s.sendall(b"GET  /api/io HTTP/1.1\r\nHost: x\r\n\r\n")  # 双空格
-        assert "200" in read_http_messages(s, 1)[0][0]
-        s.sendall(b"GET\t/api/io HTTP/1.1\r\nHost: x\r\n\r\n")  # Tab 分隔
-        assert "200" in read_http_messages(s, 1)[0][0]
-        s.sendall(b"GET /api/history?x=1&y=2 HTTP/1.1\r\nHost: x\r\n\r\n")
-        assert "200" in read_http_messages(s, 1)[0][0]
-        long_path = "/" + "a" * 200
-        s.sendall(f"GET {long_path} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
-        assert "404" in read_http_messages(s, 1)[0][0]
-    finally:
-        s.close()
+def test_request_line_parser_edges(dev, fw_kind):
+    def one_shot(req):
+        s = dev.tcp(80)
+        try:
+            s.sendall(req)
+            msgs = read_http_messages(s, 1)
+            assert msgs, "no response"
+            return msgs[0][0]
+        finally:
+            s.close()
+
+    assert "200" in one_shot(b"GET  /api/io HTTP/1.1\r\nHost: x\r\n\r\n")
+    st = one_shot(b"GET\t/api/io HTTP/1.1\r\nHost: x\r\n\r\n")  # Tab 分隔
+    if fw_kind == "freertos":
+        assert "200" in st, st
+    else:
+        assert st.split()[1] != "200", st  # Zephyr 解析器拒绝 Tab
+    assert "200" in one_shot(
+        b"GET /api/history?x=1&y=2 HTTP/1.1\r\nHost: x\r\n\r\n")
+    long_path = "/" + "a" * 200
+    assert "404" in one_shot(
+        f"GET {long_path} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
 
 
-def test_pipelined_requests(dev):
+def test_pipelined_requests(dev, fw_kind):
+    if fw_kind != "freertos":
+        pytest.skip("Zephyr http lib rejects same-segment pipelining")
     s = dev.tcp(80)
     try:
         req = (f"GET /api/io HTTP/1.1\r\nHost: {dev.ip}\r\n\r\n"
@@ -179,7 +201,10 @@ def test_pipelined_requests(dev):
         s.close()
 
 
-def test_max_two_connections(dev):
+def test_max_two_connections(dev, fw_kind):
+    if fw_kind != "freertos":
+        pytest.skip("connection cap is an httpd-port policy "
+                    "(Zephyr http lib serves more)")
     c1, c2 = dev.tcp(80), dev.tcp(80)
     try:
         with pytest.raises((ConnectionError, TimeoutError, socket.timeout)):

@@ -44,7 +44,7 @@ def test_ws_push_and_cmd(dev):
         ws.close()
 
 
-def test_ws_single_session(dev):
+def test_ws_single_session(dev, fw_kind):
     ws = ws_connect(dev)
     try:
         s = dev.tcp(80)
@@ -58,7 +58,19 @@ def test_ws_single_session(dev):
             s.sendall(key_headers.encode())
             s.settimeout(5)
             data = s.recv(4096)
-            assert b"503" in data and b"ws busy" in data, data[:120]
+            if fw_kind == "freertos":
+                assert b"503" in data and b"ws busy" in data, data[:120]
+            else:
+                # Zephyr lib sends 101 before the app busy-check rejects;
+                # the connection must then be closed without a ws session
+                assert data.startswith(b"HTTP/1.1 101"), data[:60]
+                s.settimeout(3)
+                try:
+                    while data:
+                        data = s.recv(4096)
+                except (ConnectionError, OSError):
+                    pass
+                assert not data, f"ws2 stayed open: {data[:60]!r}"
         finally:
             s.close()
     finally:

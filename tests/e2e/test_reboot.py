@@ -8,6 +8,7 @@ import time
 
 import pytest
 
+from helpers.device import wait_http_json
 from helpers.fwupd import wait_online
 from helpers.uart import drain, read_until, send_line
 
@@ -59,7 +60,7 @@ def expect_reboot_and_recover(dev, trigger, offline_within=15):
 
     wait_online(dev, 90)
 
-    _, after = dev.http_json("GET", "/api/info")
+    after = wait_http_json(dev)
     assert after["uptime_ms"] < 90_000, after["uptime_ms"]
     assert after["version"] == before["version"]
 
@@ -95,12 +96,15 @@ def test_udp_reboot(dev):
 
     def trigger():
         r = dev.udp_xfer(bytes([0x05]))
-        assert r == bytes([0x05, 0x01]), r.hex()
+        # Zephyr replies 1 byte, the FreeRTOS port appends the ok flag
+        assert r[0] == 0x05 and r[1:2] in (b"", b"\x01"), r.hex()
 
     expect_reboot_and_recover(dev, trigger)
 
 
-def test_shell_reboot(dev, uart):
+def test_shell_reboot(dev, uart, fw_kind):
+    if fw_kind != "freertos":
+        pytest.skip("io> shell is FreeRTOS-port specific")
     ensure_online(dev)
     drain(uart)
     uart.write(b"\n")

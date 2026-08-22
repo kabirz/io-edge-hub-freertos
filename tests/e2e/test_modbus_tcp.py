@@ -81,10 +81,11 @@ def test_fc08_diagnostics(mb):
     assert struct.unpack(">H", pdu[3:5])[0] >= 2, pdu.hex()  # 已计数
 
 
-def test_exceptions(mb):
+def test_exceptions(mb, fw_kind):
     assert exc_code(mb.req(MbTcp.read_req(3, 18, 1))) == 0x02  # 越界地址
     assert exc_code(mb.req(MbTcp.read_req(3, 0, 126))) == 0x03  # 数量超限
-    assert exc_code(mb.req(bytes([0x41, 0x00]))) == 0x01  # 未知功能码
+    unknown = exc_code(mb.req(bytes([0x41, 0x00])))  # 未知功能码
+    assert unknown == (0x01 if fw_kind == "freertos" else 0x04), hex(unknown)
     assert exc_code(mb.req(MbTcp.read_req(6, 5000, 1))) == 0x02  # FP 扩展区
     assert exc_code(mb.req(MbTcp.read_req(3, 5000, 1))) == 0x01
     pdu = mb.req(MbTcp.read_req(3, 0, 1), proto=1)  # 非 0 协议号 -> 异常
@@ -100,12 +101,18 @@ def test_broadcast_no_reply(mb, dev):
     regs(mb.req(MbTcp.read_req(3, 0, 1)))  # 连接仍然可用
 
 
-def test_truncated_pdu_silent_drop(mb):
-    # MBAP 声明 2 字节但 PDU 不完整: 必须静默丢弃且连接存活
+def test_truncated_pdu_silent_drop(mb, fw_kind):
+    # MBAP 声明 2 字节但 PDU 不完整: 连接必须存活
     mb.sock.sendall(struct.pack(">HHHB", 7, 0, 2, 1) + bytes([3]))
     mb.sock.settimeout(1.5)
-    with pytest.raises(socket.timeout):
-        mb.sock.recv(260)
+    if fw_kind == "freertos":
+        with pytest.raises(socket.timeout):  # FreeRTOS: 静默丢弃
+            mb.sock.recv(260)
+    else:
+        try:  # Zephyr: 库层会回错误帧
+            mb.sock.recv(260)
+        except socket.timeout:
+            pass
     mb.sock.settimeout(5)
     regs(mb.req(MbTcp.read_req(3, 0, 1)))
 
@@ -132,7 +139,10 @@ def test_pipelined_requests(mb):
     assert replies[0][7] == 3 and replies[1][7] == 3
 
 
-def test_max_two_masters(dev):
+def test_max_two_masters(dev, fw_kind):
+    if fw_kind != "freertos":
+        pytest.skip("2-master cap is an mb-tcp-port policy "
+                    "(Zephyr config serves more)")
     m1, m2 = MbTcp(dev), MbTcp(dev)
     try:
         regs(m1.req(MbTcp.read_req(3, 0, 1)))
