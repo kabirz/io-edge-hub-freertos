@@ -3,9 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * 日志输出 (target-only): USART1 115200 8N1, PA9(TX)/PA10(RX) AF7。
- *   - log_write: [HH:MM:SS][L] msg\r\n。HH:MM:SS = (epoch+8h) 取一天内
+ *   - log_write: [HH:MM:SS.mmm][L] msg\r\n。HH:MM:SS = (epoch+8h) 取一天内
  *     偏移再 gmtime (先取模免大 epoch 依赖 time_t 宽度; 天数略去,
- *     对齐 Zephyr +8 时区显示, 控制器决议 #3)
+ *     对齐 Zephyr +8 时区显示, 控制器决议 #3), mmm = 当前秒内毫秒
+ *     (io_now_ms, tick 相位推算)
+ *   - log_line/log_raw: shell 等非日志输出共用出口 (前者整行加 CRLF,
+ *     后者裸字节供回显/prompt), 与 log_write 同一 UART、同一把锁,
+ *     行级不交织
  *   - 线程安全: 静态互斥锁覆盖 "格式化 + 发送" 整段, 多任务行不交织;
  *     log_init 前锁句柄为 NULL, 直发 (仅 main 早期单线程窗口可达)
  *   - _write (newlib printf 重定向) 自 syscalls.c 移交至此, 与 log_write
@@ -15,6 +19,7 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 #include "FreeRTOS.h"
@@ -72,36 +77,23 @@ void log_init(void)
 	}
 }
 
-void log_write(char level, const char *fmt, ...)
+/* 行输出核心: 可选前缀 + 用户格式化 + CRLF (调用方持锁) */
+static void log_vline(const char *prefix, const char *fmt, va_list ap)
 {
 	char buf[LOG_LINE_MAX];
-	struct tm tm;
-	va_list ap;
-	time_t t;
-	int n, m;
+	int n = 0, m;
 
-	if (log_mutex != NULL) {
-		(void)xSemaphoreTake(log_mutex, portMAX_DELAY);
+	if (prefix != NULL) {
+		n = (int)strlen(prefix);
+		memcpy(buf, prefix, (size_t)n);
 	}
 
-	/* 时间戳: epoch+8h 的一天内偏移 (本地 +8, 对齐 Zephyr 显示习惯) */
-	t = (time_t)(((uint32_t)io_now_epoch() + 8u * 3600u) % 86400u);
-	(void)gmtime_r(&t, &tm);
-
-	n = snprintf(buf, sizeof(buf), "[%02d:%02d:%02d][%c] ",
-		     tm.tm_hour, tm.tm_min, tm.tm_sec, level);
-	if (n < 0) {
-		n = 0; /* 防御: 前缀常量格式化不可能失败 */
-	}
-	if ((size_t)n > sizeof(buf) - 4) {
-		n = (int)sizeof(buf) - 4; /* 留 vsnprintf + CRLF 空间 */
-	}
-
-	va_start(ap, fmt);
 	m = vsnprintf(buf + n, sizeof(buf) - (size_t)n, fmt, ap);
-	va_end(ap);
 	if (m > 0) {
 		n += m; /* 截断时 m 超余量, 下方统一钳位 */
+	}
+	if (n < 0) {
+		n = 0; /* 防御: 格式化错误输出空行 */
 	}
 	if ((size_t)n > sizeof(buf) - 3) {
 		n = (int)sizeof(buf) - 3; /* 尾部 CRLF + NUL */
@@ -110,7 +102,55 @@ void log_write(char level, const char *fmt, ...)
 	buf[n++] = '\r';
 	buf[n++] = '\n';
 	log_emit(buf, (uint16_t)n);
+}
 
+void log_write(char level, const char *fmt, ...)
+{
+	char prefix[24]; /* "[HH:MM:SS.mmm][X] " + NUL */
+	struct tm tm;
+	va_list ap;
+	time_t t;
+
+	/* 时间戳: epoch+8h 的一天内偏移 (本地 +8, 对齐 Zephyr 显示习惯)
+	 * + 当前秒内毫秒 */
+	t = (time_t)(((uint32_t)io_now_epoch() + 8u * 3600u) % 86400u);
+	(void)gmtime_r(&t, &tm);
+	(void)snprintf(prefix, sizeof(prefix), "[%02d:%02d:%02d.%03u][%c] ",
+		       tm.tm_hour, tm.tm_min, tm.tm_sec,
+		       (unsigned)io_now_ms(), level);
+
+	if (log_mutex != NULL) {
+		(void)xSemaphoreTake(log_mutex, portMAX_DELAY);
+	}
+	va_start(ap, fmt);
+	log_vline(prefix, fmt, ap);
+	va_end(ap);
+	if (log_mutex != NULL) {
+		(void)xSemaphoreGive(log_mutex);
+	}
+}
+
+void log_line(const char *fmt, ...)
+{
+	va_list ap;
+
+	if (log_mutex != NULL) {
+		(void)xSemaphoreTake(log_mutex, portMAX_DELAY);
+	}
+	va_start(ap, fmt);
+	log_vline(NULL, fmt, ap);
+	va_end(ap);
+	if (log_mutex != NULL) {
+		(void)xSemaphoreGive(log_mutex);
+	}
+}
+
+void log_raw(const char *buf, uint16_t len)
+{
+	if (log_mutex != NULL) {
+		(void)xSemaphoreTake(log_mutex, portMAX_DELAY);
+	}
+	log_emit(buf, len);
 	if (log_mutex != NULL) {
 		(void)xSemaphoreGive(log_mutex);
 	}

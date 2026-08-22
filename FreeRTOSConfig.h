@@ -29,6 +29,11 @@
 #define configTIMER_QUEUE_LENGTH        8
 #define configTIMER_TASK_STACK_DEPTH    256
 
+/* shell `tasks`: vTaskList 任务表 (名称/状态/优先级/栈余量/序号)。
+ * 仅开统计格式化, 不开 RUN_TIME_STATS (CPU% 需额外时基) */
+#define configUSE_TRACE_FACILITY               1
+#define configUSE_STATS_FORMATTING_FUNCTIONS   1
+
 #define configPRIO_BITS                         4
 #define configLIBRARY_LOWEST_INTERRUPT_PRIORITY 15
 #define configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY 5

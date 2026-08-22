@@ -34,6 +34,10 @@ bool set_timestamp(time_t t);
  * 之后 1Hz 软件定时器递增 (RTC 本体只在设时间时写) */
 uint32_t io_now_epoch(void);
 
+/* 当前秒内毫秒 0-999 (与 io_now_epoch 的 1Hz 递增同相位, tick 快照
+ * 推算): 供日志时间戳; host 测试不可用 (依赖 FreeRTOS tick) */
+uint32_t io_now_ms(void);
+
 /* LSE + RTC 初始化 (main 早期调用, 需在 log_init 之后 -- 内部有日志):
  * 读 RTC 恢复缓存, 无效日期 -> 0; 备份域无标志 (首次上电) 时先写入
  * 默认 2020-01-01 00:00:00, 之后由 VBAT 维持。LSE/RTC 初始化失败不

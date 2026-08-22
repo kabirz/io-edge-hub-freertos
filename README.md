@@ -214,6 +214,31 @@ boot CAN 救援机制: 每次上电 500ms 探测窗口 (0x106 "BTO1"+版本,
 `tools/can_e2e.py` (CAN), `tools/ws_e2e.py` (WS),
 `tools/boot_rescue_e2e.py` (boot 救援/砖机)。
 
+## 调试 shell 与日志
+
+固件日志时间戳带毫秒 (`[HH:MM:SS.mmm][I] msg`, 秒内毫秒由
+FreeRTOS tick 相位推算, 与 RTC 秒同相位)。调试 shell 与日志共用
+USART1 (115200 8N1, PA9/PA10), RX 为寄存器级中断, 行级输出与日志
+互斥不交织:
+
+```
+io> help
+io> tasks                # 任务表: 状态/优先级/最小栈余量
+io> reboot               # 优雅重启 (history_sync + ~3s)
+io> io                   # IO/配置总览 (对齐 Zephyr 版 src/shell.c)
+io> io info              # 版本/MAC/IP/链路/RS485/CAN/uptime/时间
+io> io di / io do / io ai
+io> io do set 3 1        # DO 单点控制 (FC05 同路径)
+io> io rs485 baud 9600 / io rs485 sid 2
+io> io can id 0x101 / io can bps 250
+io> io ip 192.168.12.101 # 保存 + 重启生效
+io> io reg [addr [val]]  # 寄存器 dump/读写 (FC03/FC06 同路径)
+io> io save / io factory
+```
+
+io 子命令写路径全部复用 `io_write_holding` / `io_write_do_bit`,
+与 Modbus/Web/UDP 副作用一致 (协议命令码与 Zephyr 版对齐)。
+
 ## 烧录
 
 SWD (ST-Link / J-Link), 芯片内部 flash 基址 `0x08000000`。

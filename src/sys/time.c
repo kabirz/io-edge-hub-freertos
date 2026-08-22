@@ -38,6 +38,7 @@ bool ts_in_range(time_t t)
 #include <stdint.h>
 
 #include "FreeRTOS.h"
+#include "task.h"
 #include "timers.h"
 
 #include "main.h"
@@ -60,18 +61,33 @@ static bool rtc_ready;
 /* epoch 缓存 (u32): 定时器服务任务写, 多任务读 */
 static volatile uint32_t epoch_cache;
 
+/* 最近一次 epoch_cache++ 对应的 tick 快照: 日志毫秒的相位基准。
+ * 定时器服务在整秒 tick 附近触发 (相位差 = 调度延迟, 通常 <1ms);
+ * 每秒重拍, tick 回绕不影响 (间隔恒 < 2^31 tick) */
+static volatile TickType_t second_tick;
+
 static StaticTimer_t time_tick_tcb;
 static TimerHandle_t time_tick_timer;
 
 static void time_tick_cb(TimerHandle_t timer)
 {
 	(void)timer;
+	second_tick = xTaskGetTickCount();
 	epoch_cache++;
 }
 
 uint32_t io_now_epoch(void)
 {
 	return epoch_cache; /* u32 对齐读原子 */
+}
+
+uint32_t io_now_ms(void)
+{
+	uint32_t ms = (uint32_t)(xTaskGetTickCount() - second_tick) * 1000u /
+		      (uint32_t)configTICK_RATE_HZ;
+
+	/* 定时器服务延迟 >1s 时商可达 1000+, 收敛回秒内 (显示略滞后) */
+	return ms % 1000u;
 }
 
 bool set_timestamp(time_t t)
@@ -109,8 +125,9 @@ bool set_timestamp(time_t t)
 	}
 
 	/* Zephyr 版: rtc_set_time 后 clock_settime; 本版直接更新缓存
-	 * (1Hz 定时器在新基准上继续递增) */
+	 * (1Hz 定时器在新基准上继续递增), 毫秒相位同步重拍 */
 	epoch_cache = (uint32_t)t;
+	second_tick = xTaskGetTickCount();
 	LOG_INF("time set: %lld", (long long)t);
 	return true;
 }
@@ -223,6 +240,7 @@ void io_time_init(void)
 		LOG_INF("RTC epoch restored: %u", (unsigned)epoch);
 	}
 	epoch_cache = epoch;
+	second_tick = xTaskGetTickCount(); /* 首个整秒前的毫秒相位 */
 
 	/* 1Hz 软件定时器递增缓存: RTC 失败时同样启动 -- epoch 从 0 自走
 	 * (对齐 Zephyr RTC 不可用时系统时钟仍自走, 仅 set_timestamp 被

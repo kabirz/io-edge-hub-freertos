@@ -43,6 +43,7 @@
 #include "fw_upg.h"       /* fw_upg_os_init */
 #include "fw_udp.h"       /* fw_udp_start */
 #include "fw_can.h"       /* fw_can_start / fw_can_frame_isr */
+#include "shell.h"        /* shell_start */
 #include "wizchip_conf.h" /* getPHYCFGR / PHYCFGR_LNK_ON (boot 链路轮询) */
 
 #include "lwip/tcpip.h"   /* tcpip_init */
@@ -152,9 +153,10 @@ static time_t hist_clock_fn(void)
 
 /* ================================================================
  * MAC 派生: STM32 96-bit UID 折叠为唯一 MAC (前 3B = Wiznet OUI)
- * (Zephyr main.c derive_mac_from_uid 逐式移植)
+ * (Zephyr main.c derive_mac_from_uid 逐式移植; 非 static -- shell
+ * io info 复用同一派生)
  * ================================================================ */
-static void derive_mac_from_uid(uint8_t *mac)
+void derive_mac_from_uid(uint8_t *mac)
 {
     static const uint8_t oui[3] = {0x00, 0x08, 0xDC};
     const uint8_t *uid = (const uint8_t *)UID_BASE; /* 12 字节, 内存序 */
@@ -305,6 +307,7 @@ static void boot_task(void *arg)
     fw_udp_start();
     web_httpd_start();
 
+    shell_start(); /* USART1 RX 中断 + shell 任务 (日志出就绪后) */
 
     LOG_INF("io-edge-hub ready");
 

@@ -88,6 +88,7 @@ set(APP_SOURCES
     src/sys/watchdog.c
     src/sys/reboot.c
     src/sys/log.c
+    src/sys/shell.c
     src/sys/os.c
     src/util/io_bytes.c
     src/util/io_crc.c

@@ -11,3 +11,4 @@ build-host/
 *.log
 build-host-win/  
 __pycache__
+build-audit/ 
