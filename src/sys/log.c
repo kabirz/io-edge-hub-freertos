@@ -13,7 +13,7 @@
  *     毫秒 (时间戳在入队时取 = 事件时间, 非刷出时间)
  *   - log_flush(timeout): 复位前排空队列 (fw 升级/延迟重启路径),
  *     否则 NVIC_SystemReset 会带走未刷出的尾部日志
- *   - log_init 前的调用丢弃 (对齐旧行为); 不可用于 ISR 上下文
+ *   - log_init 前的调用丢弃; 不可用于 ISR 上下文
  *     (入队互斥锁不可从中断获取; 现网 ISR 路径均只入队自身队列)
  */
 
@@ -139,7 +139,7 @@ void log_write(char level, const char *fmt, ...)
 	va_list ap;
 	time_t t;
 
-	/* 时间戳: epoch+8h 的一天内偏移 (本地 +8, 对齐 Zephyr 显示习惯)
+	/* 时间戳: epoch+8h 的一天内偏移 (本地 +8)
 	 * + 当前秒内毫秒 */
 	t = (time_t)(((uint32_t)io_now_epoch() + 8u * 3600u) % 86400u);
 	(void)gmtime_r(&t, &tm);

@@ -2,25 +2,15 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Modbus 寄存器管理 + 配置持久化 (直接映射 holding_reg[])
- * (io-edge-hub Zephyr 版 src/modbus/function.c 的 FreeRTOS 移植)
+ * Modbus 寄存器管理 + 配置持久化 (直接映射 holding_reg[])。
  *
  * holding_reg[] / input_reg[] 是唯一的参数与采样数据源:
  *   - config_store (A/B slots) 经 holding_reg_save/load 映射 holding_reg[]
- *     (对应 Zephyr settings/FCB 的 modbus/ 命名空间)
  *   - DI/AI 采样线程写入 input_reg[]
  *   - Modbus holding 写 (FC06/FC16) 经 io_write_holding 产生副作用
  *     (DO 输出 / 历史开关 / 设置时间 / 参数保存 / 重启)
  *
- * 与 Zephyr 版的系统性差异 (行为语义保持一致):
- *   - settings_save()/settings_load 回填   -> holding_reg_save()/holding_reg_load()
- *     经 struct io_cfg + config_store (10 键一一对应)
- *   - k_mutex_lock(reg_lock)               -> io_lock()/io_unlock()
- *   - sys_reboot(SYS_REBOOT_COLD)          -> io_reboot_cold() (reboot 前的
- *     k_msleep(100) 移入其实现, 此处不等待)
- *   - time(NULL)                           -> io_now_epoch()
- *   - APP_VERSION_*                        -> FW_VERSION_* (host 测试用 -D 注入)
- *   - 出错码 -ENOTSUP                       -> -1
+ * io_reboot_cold() 自带 reboot 前的 100ms 延时, 此处不等待。
  */
 
 #include <stdint.h>
@@ -126,7 +116,7 @@ int update_input_reg(uint16_t addr, uint16_t reg)
 
 /* 写 holding 寄存器 (带副作用, 与 Modbus FC06/FC16 语义一致)。
  * 供 Modbus 写回调与 Web (HTTP/WS) 共用, 保证所有写入路径行为一致。
- * 同值写直接返回, 跳过全部副作用 (与 Zephyr 版一致)。 */
+ * 同值写直接返回, 跳过全部副作用。 */
 int io_write_holding(uint16_t addr, uint16_t reg)
 {
 	if (addr >= ARRAY_SIZE(holding_reg)) {
@@ -211,12 +201,12 @@ int io_discrete_rd(uint16_t addr, bool *state)
 	return 0;
 }
 
-/* ==================== 配置持久化 (config_store, 对应 Zephyr settings/FCB) ==================== */
+/* ==================== 配置持久化 (config_store) ==================== */
 
 /* IP 合法性: 末字节非 0/0xff, 首字节非 0/127/组播(224-239)/保留(>=240) */
 bool ip_addr_valid(uint8_t a, uint8_t b, uint8_t c, uint8_t d)
 {
-	(void)b; /* 与 Zephyr 版一致: 仅校验首/末字节 */
+	(void)b; /* 仅校验首/末字节 */
 	(void)c;
 	if (d == 0 || d == 0xFF) {
 		return false;
@@ -238,8 +228,7 @@ static bool ip_is_valid_for_export(void)
 
 /* 触发全量保存 (供 UDP handler 改参数后持久化; CFG_SAVE 写回调也走这里)。
  * 加锁: 防止导出读全量 holding_reg 期间, 其他线程并发 update 写入导致
- * 持久化到半更新状态 (对应 Zephyr export 回调读 + settings_save 整体临界区)。
- * IP 非法时跳过导出 (对齐 Zephyr mb_handle_export), 保留旧 cfg.ip。 */
+ * 持久化到半更新状态。IP 非法时跳过导出, 保留旧 cfg.ip。 */
 void holding_reg_save(void)
 {
 	struct io_cfg cfg;
@@ -264,8 +253,8 @@ void holding_reg_save(void)
 	io_unlock();
 }
 
-/* config_store -> holding_reg 回填 (boot 时 config_store_init 之后调用,
- * 对应 Zephyr settings_load 的 mb_handle_set)。ip 仅当合法时回填。 */
+/* config_store -> holding_reg 回填 (boot 时 config_store_init 之后调用)。
+ * ip 仅当合法时回填。 */
 void holding_reg_load(void)
 {
 	struct io_cfg cfg;

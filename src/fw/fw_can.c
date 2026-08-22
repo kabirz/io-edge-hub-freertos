@@ -2,15 +2,14 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * CAN 固件升级通道实现 (Zephyr libs/can_fw_upgrade/can_fw_upgrade.c
- * app 域部分的逐式移植):
- *   - RX: can.c ISR 读帧入队 (深度 32, 对齐 Zephyr msgq: keyhash 5 帧 +
- *     START 在 ~3ms 内连发), 本任务消费; 0x101/0x103/0x104 内部处理,
- *     其余帧交业务回调 (现无注册者, 静默丢弃 + 计数)
- *   - 协议语义对齐: START 无条件重开会话 (重擦, 兼容上次失败残留)、
+ * CAN 固件升级通道实现:
+ *   - RX: can.c ISR 读帧入队 (深度 32: keyhash 5 帧 + START 在 ~3ms
+ *     内连发), 本任务消费; 0x101/0x103/0x104 内部处理, 其余帧交业务
+ *     回调 (现无注册者, 静默丢弃 + 计数)
+ *   - 协议语义: START 无条件重开会话 (重擦, 兼容上次失败残留)、
  *     keyhash 仅在 5 帧到齐时校验 (老上位机不发 0x104 放行)、
  *     CONFIRM 无 CRC (镜像完整性由 MCUboot 验签兜底)、REBOOT 不应答。
- *     流控窗口 512B 对齐 Zephyr CAN_FW_OFFSET_REPLY_BYTES。
+ *     流控窗口 512B。
  */
 
 #include <stdio.h>
@@ -63,7 +62,7 @@ enum {
 #define KEYHASH_FULL_MASK ((1u << KEYHASH_CHUNKS) - 1u)
 
 #define FW_Q_DEPTH 32u
-#define ACK_INTERVAL 512u /* 对齐 Zephyr CAN_FW_OFFSET_REPLY_BYTES */
+#define ACK_INTERVAL 512u /* 流控: 每 512B 回一次 offset */
 
 struct can_fw_msg {
     uint32_t id;
@@ -136,7 +135,7 @@ static void handle_platform_rx(const uint8_t *data, uint8_t dlc)
     switch (cmd) {
     case FW_CMD_START_UPDATE: {
         /* 无条件重开: 上次中途失败的传输若不复位, 旧偏移/缓冲
-         * 会导致 flash 写错位 (对齐 Zephyr 语义) */
+         * 会导致 flash 写错位 */
         const uint8_t *kh = NULL;
         int rc;
 
@@ -211,7 +210,7 @@ static void handle_platform_rx(const uint8_t *data, uint8_t dlc)
     }
 
     case FW_CMD_REBOOT:
-        /* 对齐 Zephyr: 不应答, 短延迟后排空期重启 */
+        /* 不应答, 短延迟后排空期重启 */
         LOG_INF("fwcan: reboot requested");
         vTaskDelay(pdMS_TO_TICKS(100));
         log_flush(500); /* 复位前把异步日志刷出 */
@@ -287,7 +286,7 @@ static void fw_task(void *arg)
             handle_keyhash(m.data, m.dlc);
             break;
         default:
-            /* 业务帧: 现无业务处理 (原 can.c 静默消费语义), 丢弃 */
+            /* 业务帧: 现无业务处理, 丢弃 */
             break;
         }
     }

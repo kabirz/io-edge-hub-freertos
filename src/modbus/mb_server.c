@@ -2,33 +2,19 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Modbus PDU 解码器 (Zephyr subsys/modbus/modbus_server.c 的从零重写,
- * 行为逐分支对齐; 基于 uC/Modbus mbs_core.c 的 Apache-2.0 派生实现)。
+ * Modbus PDU 解码器 (基于 uC/Modbus mbs_core.c 的 Apache-2.0 派生实现)。
+ * 本文件只见 PDU (fc + data); ADU 层 (MBAP 头 / RTU CRC / unit-id 过滤 /
+ * 广播不应答) 归传输层 (Task 10/11)。
  *
- * 与 Zephyr 版的结构性差异 (行为语义保持一致):
- *   - struct modbus_context (rx_adu/tx_adu/计数器) -> 入出参缓冲 + 静态
- *     诊断计数器; ADU 层 (MBAP 头 / RTU CRC / unit-id 过滤 / 广播不应答)
- *     归传输层 (Task 10/11), 本文件只见 PDU (fc + data)
- *   - mbs_user_cb 回调表 -> regmap.c 直连 (io_modbus_cbs 的等价映射):
- *     holding_reg_rd   -> io_read_holding   (地址范围检查在此补齐)
- *     holding_reg_wr   -> io_write_holding
- *     input_reg_rd     -> get_input_reg     (地址范围检查在此补齐)
- *     coil_rd          -> io_coil_rd
- *     coil_wr          -> io_write_do_bit
- *     discrete_input_rd-> io_discrete_rd
- *   - CONFIG_MODBUS_FP_EXTENSIONS=y 但 fp 回调为 NULL: 地址 >= 5000 的
- *     FC03/04/16 一律异常 0x01 (ILLEGAL_FC), 无浮点路径; FC06 无 FP
- *     分支 (Zephyr 同款), 走整数回调越界 -> 异常 0x02
- *   - mbs_try_user_fc 自定义 FC 表为空: 未知 FC -> 0x01
- *   - 出错码 -ENOTSUP -> -1
+ * FP 扩展区 (地址 >= 5000) 无 fp 回调: FC03/04/16 一律异常 0x01
+ * (ILLEGAL_FC), 无浮点路径; FC06 无 FP 分支, 走整数回调越界 -> 异常 0x02。
+ * 自定义 FC 表为空: 未知 FC -> 0x01。
  *
  * 诊断计数器对应关系 (FC08 子功能):
- *   bus_msg (0x0B): mb_server_process 每次入口 +1 (update_msg_ctr)
- *   srv_msg (0x0E): 同上 (Zephyr 在 unit-id 匹配后、FC 分发前 +1;
- *                   传输层只把发往本机的 PDU 送来, 两者等价)
- *   exc     (0x0D): 每条异常响应 +1 (mbs_exception_rsp)
+ *   bus_msg (0x0B): mb_server_process 每次入口 +1
+ *   srv_msg (0x0E): 同上 (传输层只把发往本机的 PDU 送来)
+ *   exc     (0x0D): 每条异常响应 +1
  *   crc_err (0x0C) / no_resp (0x0F): 传输层经 mb_server_diag_count 上报
- *     (对应 Zephyr 的 rx_adu_err==-EIO / unit-id 不匹配 / 广播 / 静默丢弃)
  */
 
 #include <string.h>
@@ -39,7 +25,7 @@
 #include "init.h"
 #include "io_bytes.h"
 
-/* ==================== 常量 (modbus_internal.h / modbus.h) ==================== */
+/* ==================== 常量 ==================== */
 
 /* Function codes */
 #define MB_FC01_COIL_RD		0x01
@@ -68,7 +54,7 @@
 
 #define MB_COIL_OFF_CODE		0x0000 /* FC05: 值 0x0000 = OFF, 其他 = ON */
 
-/* FP 扩展区起始地址 (Zephyr CONFIG_MODBUS_FP_EXTENSIONS=y) */
+/* FP 扩展区起始地址 */
 #define MB_FP_EXTENSIONS_ADDR		5000
 
 /* ==================== 诊断计数器 ==================== */
@@ -82,8 +68,8 @@ void mb_server_diag_count(enum mb_diag_counter c)
 	}
 }
 
-/* ==================== 寄存器回调 (io_modbus_cbs 等价映射) ==================== */
-/* 返回 0 = 成功, -1 = 地址不支持 (Zephyr -ENOTSUP -> 异常 0x02) */
+/* ==================== 寄存器回调 ==================== */
+/* 返回 0 = 成功, -1 = 地址不支持 (-> 异常 0x02) */
 
 static int holding_reg_rd_cb(uint16_t addr, uint16_t *reg)
 {
@@ -125,7 +111,7 @@ static int holding_reg_wr_cb(uint16_t addr, uint16_t reg)
 
 /* ==================== 响应组装辅助 ==================== */
 
-/* 异常响应: fc|0x80 + 异常码 (对应 mbs_exception_rsp, 含 exc++)。
+/* 异常响应: fc|0x80 + 异常码, 计 exc++。
  * 返回 true = 有响应 */
 static bool exc_rsp(uint8_t fc, uint8_t code, uint8_t *out, uint16_t *out_len)
 {
@@ -280,8 +266,7 @@ static bool fc03_hreg_read(const uint8_t *d, uint16_t dlen,
 	num_bytes = reg_qty * sizeof(uint16_t);
 
 	if (reg_addr >= MB_FP_EXTENSIONS_ADDR) {
-		/* FP 扩展区无 fp 回调 (Zephyr NULL holding_reg_rd_fp
-		 * -> ILLEGAL_FC) */
+		/* FP 扩展区无 fp 回调 -> ILLEGAL_FC */
 		return exc_rsp(MB_FC03_HOLDING_REG_RD, MB_EXC_ILLEGAL_FC,
 			       out, out_len);
 	}
@@ -392,7 +377,7 @@ static bool fc05_coil_write(const uint8_t *d, uint16_t dlen,
 /* FC06 (0x06) Write Single Register
  *
  * Request/Response: fc | 寄存器地址(2) | 寄存器值(2)
- * 无 FP 分支 (Zephyr 同款): addr >= 5000 走整数写回调, 越界 -> 0x02
+ * 无 FP 分支: addr >= 5000 走整数写回调, 越界 -> 0x02
  */
 static bool fc06_hreg_write(const uint8_t *d, uint16_t dlen,
 			    uint8_t *out, uint16_t *out_len)
@@ -479,7 +464,7 @@ static bool fc08_diagnostics(const uint8_t *d, uint16_t dlen,
  *
  * Request:  fc | 起始地址(2) | 输出数(2) | 字节数(1) | 线圈值 N*1
  * Response: fc | 起始地址(2) | 输出数(2)
- * 逐线圈写, 失败前的写入保留 (Zephyr 语义)
+ * 逐线圈写, 失败前的写入保留
  */
 static bool fc15_coils_write(const uint8_t *d, uint16_t dlen,
 			     uint8_t *out, uint16_t *out_len)
@@ -539,7 +524,7 @@ static bool fc15_coils_write(const uint8_t *d, uint16_t dlen,
  *
  * Request:  fc | 起始地址(2) | 寄存器数(2) | 字节数(1) | 寄存器值 N*2
  * Response: fc | 起始地址(2) | 寄存器数(2)
- * 逐寄存器写, 失败前的写入保留 (Zephyr 语义)
+ * 逐寄存器写, 失败前的写入保留
  */
 static bool fc16_hregs_write(const uint8_t *d, uint16_t dlen,
 			     uint8_t *out, uint16_t *out_len)
@@ -567,15 +552,15 @@ static bool fc16_hregs_write(const uint8_t *d, uint16_t dlen,
 			       out, out_len);
 	}
 
-	/* PDU 长度与字节数自洽 (Zephyr: length-5 != num_bytes -> 0x03) */
+	/* PDU 长度与字节数自洽: length-5 != num_bytes -> 0x03 */
 	if ((dlen - 5) != num_bytes) {
 		return exc_rsp(MB_FC16_HOLDING_REGS_WR, MB_EXC_ILLEGAL_DATA_VAL,
 			       out, out_len);
 	}
 
-	/* 字节数整除判断 (Zephyr: num_bytes/reg_qty != 2 -> 0x03,
-	 * 整数除法: 尾部多余字节通过, 如 qty=2/nbytes=5; reg_qty>=1
-	 * 已由上面的数量门保证) */
+	/* 字节数整除判断: num_bytes/reg_qty != 2 -> 0x03 (整数除法:
+	 * 尾部多余字节通过, 如 qty=2/nbytes=5; reg_qty>=1 已由上面的
+	 * 数量门保证) */
 	if ((uint16_t)(num_bytes / reg_qty) != 2) {
 		return exc_rsp(MB_FC16_HOLDING_REGS_WR, MB_EXC_ILLEGAL_DATA_VAL,
 			       out, out_len);
@@ -616,8 +601,7 @@ bool mb_server_process(const uint8_t *in, uint16_t in_len,
 	d = in + 1;
 	dlen = in_len - 1;
 
-	/* 诊断计数 (对应 update_msg_ctr / update_server_msg_ctr:
-	 * 到达本解码器的均为发往本机的有效 PDU) */
+	/* 诊断计数: 到达本解码器的均为发往本机的有效 PDU */
 	diag_ctr[MB_DIAG_BUS_MSG]++;
 	diag_ctr[MB_DIAG_SRV_MSG]++;
 
@@ -641,7 +625,7 @@ bool mb_server_process(const uint8_t *in, uint16_t in_len,
 	case MB_FC16_HOLDING_REGS_WR:
 		return fc16_hregs_write(d, dlen, out, out_len);
 	default:
-		/* 未知 FC: 自定义 FC 表为空 -> ILLEGAL_FC (mbs_try_user_fc) */
+		/* 未知 FC: 自定义 FC 表为空 -> ILLEGAL_FC */
 		return exc_rsp(fc, MB_EXC_ILLEGAL_FC, out, out_len);
 	}
 }

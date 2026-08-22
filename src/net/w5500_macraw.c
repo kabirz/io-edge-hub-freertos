@@ -37,7 +37,7 @@
 #define W5500_INT_PORT  GPIOD
 #define W5500_INT_PIN   GPIO_PIN_1
 
-/* 合法以太网帧长上限 (ioLibrary SOCKFATAL_PACKLEN 同值) */
+/* 合法以太网帧长上限 */
 #define MACRAW_MAX_FRAME  1514
 
 /* RX task config */
@@ -180,7 +180,6 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
 
 /*
  * 读取一帧。返回 pbuf (交给 netif->input), 无数据或异常恢复后返回 NULL。
- * 时序与 ioLibrary recvfrom() SOCK_MACRAW 分支一致。
  */
 static struct pbuf *low_level_input(void)
 {
@@ -261,7 +260,7 @@ static void macraw_rx_task(void *arg)
     (void)arg;
     for (;;) {
         /* EXTI 事件唤醒 (INT 低有效, 收包即拉低); 10ms 超时兜底
-         * (INT 未使能/未接线时退化为原轮询, 行为不劣于旧版) */
+         * (INT 未使能/未接线时退化为轮询) */
         (void)xSemaphoreTake(rx_sem, pdMS_TO_TICKS(10));
 
         if (getSn_RX_RSR(MACRAW_SN) == 0) {

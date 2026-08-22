@@ -2,8 +2,7 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * IO 历史记录 OS 壳 (Zephyr 版 src/history/history.c 的 FreeRTOS 移植):
- * msgq + k_work 专用工作队列 -> 静态队列 + 专属任务。文件逻辑 (命名/
+ * IO 历史记录 OS 壳: 静态队列 + 专属任务。文件逻辑 (命名/
  * 轮转/清理/续写) 在纯核心 history_file.c (host 已测)。
  *
  *   - DI/AI 采样线程 send_history_data() 入队; 历史任务批量取队写当前
@@ -45,7 +44,7 @@ static uint8_t hist_queue_buf[HIST_QUEUE_DEPTH * sizeof(struct his_data)];
 static StaticQueue_t hist_queue_cb;
 static QueueHandle_t hist_queue;
 
-static StackType_t hist_task_stack[1024]; /* 字 = 4096B, 对齐 Zephyr hist workq 栈 */
+static StackType_t hist_task_stack[1024]; /* 字 = 4096B */
 static StaticTask_t hist_task_tcb;
 
 static void hist_task(void *arg)
@@ -56,10 +55,10 @@ static void hist_task(void *arg)
 	for (;;) {
 		if (xQueueReceive(hist_queue, &d, pdMS_TO_TICKS(100)) == pdTRUE) {
 			xSemaphoreTake(hist_lock, portMAX_DELAY);
-			/* 批量排空当前积压 (Zephyr his_flush: 取空 msgq 为止) */
+			/* 批量排空当前积压 (取空为止) */
 			do {
 				if (hist_file_write(&d) != 0) {
-					/* 短写/打开失败: 本条丢弃 (与 Zephyr 同, 部分
+					/* 短写/打开失败: 本条丢弃 (部分
 					 * 写入的尾字节作废), 剩余记录留在队列, 下次
 					 * 迭代已强制轮转到新文件再写 */
 					break;
@@ -103,8 +102,8 @@ bool send_history_data(const struct his_data *d)
 	if (xQueueSend(hist_queue, d, 0) == pdTRUE) {
 		return true;
 	}
-	/* 后台落盘慢时队列会满, 节流告警: 每 4 次一告 (对齐 Zephyr
-	 * atomic_inc 返回旧值后再判 %4 的节奏) */
+	/* 后台落盘慢时队列会满, 节流告警: 每 4 次一告 (drop_cnt++
+	 * 返回旧值后再判 %4) */
 	if ((drop_cnt++ % 4) == 0) {
 		LOG_WRN("history queue full, %u samples dropped", drop_cnt);
 	}
@@ -117,7 +116,7 @@ void history_enable_write(bool en)
 	LOG_INF("history %s", en ? "enabled" : "disabled");
 	if (!en) {
 		/* 异步 flush + 关闭, 不在调用线程 (Modbus 写回调) 做 Flash IO;
-		 * 任务在下次迭代排空队列后关闭 (Zephyr k_work 提交的对应物) */
+		 * 任务在下次迭代排空队列后关闭 */
 		hist_close_req = true;
 	}
 }
@@ -204,8 +203,7 @@ int history_web_open(const char *name)
 	int rc = -1;
 
 	xSemaphoreTake(hist_lock, portMAX_DELAY);
-	/* 下载前刷采样缓存 (对齐 Zephyr /api/history/download 先
-	 * history_sync 再打开): 当前文件末尾的最新采样可见 */
+	/* 下载前刷采样缓存: 当前文件末尾的最新采样可见 */
 	hist_file_sync();
 	if (!web_fp_open && lfs_file_open(hist_lfs, &web_fp, name,
 					  LFS_O_RDONLY) == 0) {

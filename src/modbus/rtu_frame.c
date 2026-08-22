@@ -5,33 +5,18 @@
  * Modbus RTU 从站帧状态机 (纯逻辑, host 可测)。传输层 (rtu.c) 喂数据
  * 与 t3.5 超时, 本模块负责拼帧、校验、单播过滤、交付解码与应答组装。
  *
- * 语义基准 (Zephyr 源码逐条核定):
- *   - subsys/modbus/modbus_serial.c modbus_rtu_rx_adu(): len<4 或 >256
- *     -> -EMSGSIZE; CRC 不符 -> -EIO; PDU = buf[1..len-3]。
- *   - subsys/modbus/modbus_core.c modbus_rx_handler(): 解析后无条件调
- *     modbus_server_handler() (错误帧也进 handler)。
- *   - subsys/modbus/modbus_server.c modbus_server_handler(): 入口
- *     update_msg_ctr (bus_msg); rx_adu_err!=0 -> noresp (+-EIO 时
- *     crc_err); 他站 unit -> noresp; 广播 -> 副作用执行后 send_reply
- *     强制 false -> noresp; 正常应答无 noresp。
- *
- * 诊断计数组合 (本移植 mb_server_process 在解码器入口计 bus/srv,
- * 故传输层只对"未到达解码器"的丢弃帧补 MB_DIAG_BUS_MSG, 不重复计):
- *   溢出 / len<4  -> bus_msg + no_resp            (Zephyr -EMSGSIZE 路径)
- *   CRC 错        -> bus_msg + crc_err + no_resp  (Zephyr -EIO 路径)
- *   他站 unit     -> bus_msg + no_resp            (Zephyr 单计 noresp)
+ * 诊断计数组合 (mb_server_process 在解码器入口计 bus/srv, 故本层只对
+ * "未到达解码器"的丢弃帧补 MB_DIAG_BUS_MSG, 不重复计):
+ *   溢出 / len<4  -> bus_msg + no_resp
+ *   CRC 错        -> bus_msg + crc_err + no_resp
+ *   他站 unit     -> bus_msg + no_resp
  *   广播 unit==0  -> [解码器计 bus/srv] + no_resp (副作用照常执行)
  *   单播 PDU 长度违例被解码器静默 -> [解码器计 bus/srv] + no_resp
- *   空 t3.5 (无字节) -> 无操作 (Zephyr 定时器只在收到字节后启动,
- *   空到期不可能发生; 传输层误触发时防御性忽略)
- * 溢出说明: Zephyr 字面行为是把截断的 256B 缓冲照做 CRC 校验 (几乎必
- * 走 -EIO -> crc_err); 本实现按任务锁定的"溢出 -> 丢弃至复位"规则归
- * 入长度违例类 (不计 crc_err), 分歧已在任务报告记录。
+ *   空 t3.5 (无字节) -> 无操作 (防御性忽略)
  *
  * 并发: target 上 rtu_rx_feed 运行于 USART2 ISR, rtu_t35_expired 运行
  * 于 RTU 任务; t3.5 到期时刻帧必已收完 (3.5 字符静默 >= 任何字节间隔),
- * 入口先快照长度/溢出再复位, 处理中新到的字节属于下一帧 (被复位清掉,
- * 对应 Zephyr 在 work 里先 rx_disable 再解析的语义)。
+ * 入口先快照长度/溢出再复位, 处理中新到的字节属于下一帧 (被复位清掉)。
  */
 
 #include <string.h>
@@ -41,7 +26,6 @@
 #include "io_crc.h"
 #include "io_compat.h" /* IO_WEAK (MSVC 主机测试兼容) */
 
-/* Zephyr CONFIG_MODBUS_BUFFER_SIZE / MODBUS_RTU_MIN_MSG_SIZE */
 #define RTU_FRAME_MAX 256u
 #define RTU_FRAME_MIN 4u
 
@@ -52,7 +36,7 @@ static volatile bool rx_overflow;
 
 /* 绑定配置 */
 static uint8_t srv_unit;
-static uint32_t bound_baud; /* 记录对齐 Zephyr cfg->baud, 见头文件 */
+static uint32_t bound_baud; /* 绑定波特率记录, 见头文件 */
 static void (*tx_cb)(const uint8_t *frame, uint16_t len);
 
 /* 应答组装缓冲: unit + PDU 上限 + crc16 LE16 */
@@ -107,7 +91,7 @@ void rtu_t35_expired(void)
 	}
 
 	if (overflow || len < RTU_FRAME_MIN) {
-		/* 长度违例 (Zephyr -EMSGSIZE): 静默 */
+		/* 长度违例: 静默 */
 		mb_server_diag_count(MB_DIAG_BUS_MSG);
 		mb_server_diag_count(MB_DIAG_NO_RESP);
 		return;
@@ -117,7 +101,7 @@ void rtu_t35_expired(void)
 	crc_rx = (uint16_t)(rx_buf[len - 2] | (rx_buf[len - 1] << 8));
 	crc_calc = crc16_modbus(rx_buf, (size_t)(len - 2));
 	if (crc_rx != crc_calc) {
-		/* CRC 错 (Zephyr -EIO): 静默 */
+		/* CRC 错: 静默 */
 		mb_server_diag_count(MB_DIAG_BUS_MSG);
 		mb_server_diag_count(MB_DIAG_CRC_ERR);
 		mb_server_diag_count(MB_DIAG_NO_RESP);
@@ -143,8 +127,7 @@ void rtu_t35_expired(void)
 		return;
 	}
 
-	/* 应答: unit 回显请求值 (Zephyr tx_adu.unit_id = rx_adu.unit_id)
-	 * + PDU + crc16 LE16 */
+	/* 应答: unit 回显请求值 + PDU + crc16 LE16 */
 	tx_frame[0] = unit;
 	memcpy(&tx_frame[1], rsp_pdu, rsp_len);
 	crc_calc = crc16_modbus(tx_frame, (size_t)rsp_len + 1);
@@ -169,8 +152,7 @@ uint32_t rtu_t35_ms(uint32_t baud)
 	uint32_t us;
 
 	if (baud == 0 || baud > 19200u) {
-		/* 规范定值 (任务锁定); Zephyr 字面公式为 >38400 钳制到
-		 * ~1ms, 此处按 Modbus 规范的 2ms 推荐 */
+		/* 规范推荐定值: 高波特率下 t3.5 固定取 2ms */
 		return 2u;
 	}
 

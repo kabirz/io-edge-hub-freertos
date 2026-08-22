@@ -5,26 +5,22 @@
  * Modbus RTU 传输层 (target-only): USART2 PA2(TX)/PA3(RX) 8N1 +
  * RS485 DE PA1 (推挽输出, 空闲低)。
  *
- * Zephyr subsys/modbus/modbus_serial.c (IRQ API 路径) 的 FreeRTOS 移植:
  *   - RX: HAL_UARTEx_ReceiveToIdle_IT —— IDLE 事件(帧内 >=1 字符静默,
  *     < t3.5)回调里 rtu_rx_feed() 喂帧状态机并重启接收; 状态机内部经
  *     rtu_t35_kick() (本文件强符号, ISR 上下文 xTimerResetFromISR)
- *     重启 t3.5 单次软件定时器, 对齐 Zephyr 每字节 k_timer_start。
+ *     重启 t3.5 单次软件定时器。
  *   - t3.5 到期: 定时器服务任务(prio 4)回调里 xTaskNotifyGive 唤醒
  *     RTU 任务(prio 5) -> rtu_t35_expired() 解帧。软件定时器回调运行
- *     于任务上下文而非 ISR, 用非 FromISR 版本是唯一正确调用 (任务
- *     指令里 vTaskNotifyGiveFromISR 的提法以本注记为准)。
+ *     于任务上下文而非 ISR, 须用非 FromISR 版本。
  *   - TX (rtu_tx_frame, RTU 任务上下文): 先 HAL_UART_AbortReceive
- *     抑制自发回环 (对齐 Zephyr rx_off 先于 tx_on —— RS485 收发器
- *     RE 常使能时会收到自己发出的帧), DE 拉高 + ~20us 建立时间后
- *     HAL_UART_Transmit_IT; TxCplt 回调(USART2 判定)里 DE 拉低并
- *     重启接收 (对齐 uart_irq_tx_complete -> tx_off -> rx_on)。
- *   - 帧处理期间 (frame_pending) 新到的 RX 事件丢弃: 对齐 Zephyr
- *     work 里先 rx_disable 再解析的语义 (处理中字节不入帧)。
+ *     抑制自发回环 (RS485 收发器 RE 常使能时会收到自己发出的帧),
+ *     DE 拉高 + ~20us 建立时间后 HAL_UART_Transmit_IT; TxCplt 回调
+ *     (USART2 判定)里 DE 拉低并重启接收。
+ *   - 帧处理期间 (frame_pending) 新到的 RX 事件丢弃 (处理中字节不入帧)。
  *   - USART2 IRQ 优先级 6 >= configLIBRARY_MAX_SYSCALL_INTERRUPT_
  *     PRIORITY(5): 回调内 FromISR 调用合法。
  *   - 波特率/从站号启动时读 reg 0x08/0x09 固定, 运行期写只存不生效
- *     (对齐现版, 重启后经 config_store 生效)。
+ *     (重启后经 config_store 生效)。
  */
 
 #include "FreeRTOS.h"
@@ -96,8 +92,7 @@ static void rtu_task(void *arg)
 		(void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 		rtu_t35_expired();
 		if (!tx_busy) {
-			/* 无应答: 立即恢复接收 (对齐 Zephyr 静默路径的
-			 * rx_on); 有应答时由 TxCplt 收尾清除 */
+		/* 无应答: 立即恢复接收; 有应答时由 TxCplt 收尾清除 */
 			frame_pending = false;
 		}
 	}
@@ -136,7 +131,7 @@ static void rtu_tx_finish(void)
 static void rtu_tx_frame(const uint8_t *frame, uint16_t len)
 {
 	tx_busy = true;
-	/* 抑制自发回环 (Zephyr rx_off -> tx_on 次序): 应答期间不收 */
+	/* 抑制自发回环: 应答期间不收 */
 	(void)HAL_UART_AbortReceive(&huart2);
 
 	HAL_GPIO_WritePin(RTU_DE_PORT, RTU_DE_PIN, GPIO_PIN_SET);
@@ -173,9 +168,8 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 }
 
 /* ReceiveToIdle_IT 的 IT 接收遇错 (噪声/帧错/溢出) 即终止: 不重启则
- * RTU 静默死亡。此处重启接收让残帧走 CRC/长度丢弃路径自恢复 (对齐
- * Zephyr cb_handler_rx 持续排空 FIFO 的鲁棒性); TX 出错 (TxCplt 不会
- * 再来) 同样走收尾释放 DE, 避免总线被钳死在发送态。 */
+ * RTU 静默死亡。此处重启接收让残帧走 CRC/长度丢弃路径自恢复; TX 出错
+ * (TxCplt 不会再来) 同样走收尾释放 DE, 避免总线被钳死在发送态。 */
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
 	if (huart->Instance != RTU_UART || started == false) {
@@ -247,7 +241,7 @@ void mb_rtu_start(void)
 	 * 只存不生效 */
 	baud = get_holding_reg(HOLDING_RS485_BAUDRATE_IDX);
 	/* 波特率兜底: 0 或超出 1200..115200 回落 9600 —— HAL 对 baud 0
-	 * 初始化失败 (Zephyr 侧 -EINVAL), 持久化损坏值不得阻断 UART 启动 */
+	 * 初始化失败, 持久化损坏值不得阻断 UART 启动 */
 	if (baud < 1200u || baud > 115200u) {
 		LOG_WRN("rtu baud %u invalid, fallback 9600", (unsigned)baud);
 		baud = 9600;

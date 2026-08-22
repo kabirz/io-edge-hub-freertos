@@ -2,8 +2,8 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * IO 历史记录纯文件核心: Zephyr 版 src/history/history.c 文件逻辑的
- * littlefs 原生 API 移植 (命名/轮转/清理/续写逐行保留)。
+ * IO 历史记录纯文件核心 (命名/轮转/清理/续写); 路径即文件名本身
+ * (lfs 根)。
  *
  *   - DI/AI 采样经 history.c 壳投递, 本层逐条追加写当前文件
  *   - 单文件 HIST_FILE_MAX 上限: 超过则关闭 + 新建 data_MMDD_HHMMSS.raw
@@ -11,13 +11,6 @@
  *     运行期 disable→enable 续写关闭前的文件, 不新建
  *   - 保留至多 HIST_MAX_FILES 个文件, 超限删最旧 (按名序 = 时间序)
  *   - DI 10B / AI 16B, 与 RT-Thread / PC 解析工具兼容
- *
- * 移植映射: fs_open(FS_O_APPEND|FS_O_CREATE|FS_O_WRONLY) →
- * lfs_file_open(LFS_O_APPEND|LFS_O_CREAT|LFS_O_WRONLY);
- * fs_seek(END)+fs_tell → lfs_file_size (打开句柄);
- * fs_unlink → lfs_remove; fs_opendir/readdir → lfs_dir_open/read;
- * fs_sync → lfs_file_sync。Zephyr 的 HIST_DIR "/lfs1" 对应 lfs 根
- * ("/"), 路径即文件名本身。
  *
  * host 可测: 仅 libc + littlefs, 无任何 OS/FreeRTOS 调用; 时钟经
  * hist_file_set_clock 注入。littlefs 无内部锁 — 所有 hist_file_* 必须
@@ -49,7 +42,7 @@ static uint32_t his_cur_size;
  * 空 = 尚未打开过 (开机走目录扫描复用最新文件) */
 static char his_cur_name[24];
 
-/* 命名用时钟 (host 测试注入固定时间; target 用 time(NULL), Zephyr 版同源) */
+/* 命名用时钟 (host 测试注入固定时间; target 用 time(NULL)) */
 static time_t default_clock(void)
 {
 	return time(NULL);
@@ -72,9 +65,8 @@ static void cleanup_old_files(void)
 			continue;
 		}
 		if (n < HIST_MAX_FILES + 2) {
-			/* 限长拷贝 (容量 24B 截断为本意, names[12] 上限与
-			 * Zephyr 版一致; strncpy 在 -O3 触发误报
-			 * -Wstringop-truncation, 改显式钳位) */
+			/* 限长拷贝 (容量 24B 截断为本意; strncpy 在 -O3
+			 * 触发误报 -Wstringop-truncation, 改显式钳位) */
 			size_t len = strlen(info.name);
 
 			if (len > sizeof(names[0]) - 1) {
@@ -106,7 +98,7 @@ static void cleanup_old_files(void)
 
 static void make_hist_name(char *buf, size_t len)
 {
-	/* UTC+8: 手动加 8 小时 (Zephyr 版注释同: picolibc 不做时区偏移) */
+	/* UTC+8: 手动加 8 小时 (picolibc 不做时区偏移) */
 	time_t t = hist_clock() + 8 * 3600;
 	struct tm tmp;
 	struct tm *lt = gmtime_r(&t, &tmp);
@@ -137,7 +129,7 @@ static int open_append(const char *name, bool create)
 	if (lfs_file_open(his_lfs, &his_fp, name, flags) != 0) {
 		return -1;
 	}
-	/* Zephyr 版 fs_seek(END)+fs_tell 取大小; LFS_O_APPEND 保证写总在末尾 */
+	/* LFS_O_APPEND 保证写总在末尾 */
 	size = lfs_file_size(his_lfs, &his_fp);
 	if (size < 0) {
 		LOG_ERR("history file size failed: %ld", (long)size);
@@ -271,7 +263,7 @@ void hist_file_close(void)
 
 int hist_file_init(lfs_t *lfs)
 {
-	/* boot 语义: 静态状态归零 (Zephyr 版静态初始化即此), 不做任何
+	/* boot 语义: 静态状态归零, 不做任何
 	 * lfs 调用 — 上一会话若异常掉电, 打开句柄本就不存在 */
 	his_lfs = lfs;
 	his_fp_open = false;

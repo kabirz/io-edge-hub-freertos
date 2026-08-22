@@ -3,14 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * 数字 IO: 16 路 DI 采集 + 8 路 DO 输出 + 8 路 LED 指示
- *   - Zephyr 版 src/io/dio.c 的 FreeRTOS 移植 (行为权威源):
- *     GPIO 表按 overlay /zephyr,user 硬编码 (顺序即通道号),
+ *   - GPIO 表硬编码 (顺序即通道号),
  *     DI 由独立任务周期采样 (周期 = holding_reg[0x03] 钳 [10,5000]ms),
  *     单次瞬时读、无消抖, 仅使能通道 (holding_reg[0x01] bitmap) 参与,
  *     结果写 input_reg[INPUT_DI_IDX]; 禁用通道读 0。
  *   - DO 由 mb_set_do() 驱动 (holding_reg[0x00] 写回调 / 网络断连安全
- *     清零), LED 无条件跟随 DO 状态 (对齐 Zephyr i<DO_NUM 循环 +
- *     i<ARRAY_SIZE(led_gpios) 镜像)。
+ *     清零), LED 无条件跟随 DO 状态。
  *   - DI 使能 (!=0) 时, 采样数据异步送历史记录 (send_history_data
  *     内部按历史开关决定是否落盘)。
  */
@@ -34,7 +32,7 @@
 #define DIO_TASK_STACK 256u /* 字 */
 #define DIO_TASK_PRIO  6u
 
-/* 引脚描述 (overlay di-gpios/do-gpios/led-gpios, 顺序即通道号) */
+/* 引脚描述 (顺序即通道号) */
 struct dio_pin {
 	GPIO_TypeDef *port;
 	uint16_t pin;
@@ -122,8 +120,7 @@ static void di_task(void *arg)
 }
 
 /* ================================================================
- * GPIO 初始化 + 任务启动 (对齐 Zephyr SYS_INIT dio_init 与
- * K_THREAD_DEFINE 的合并; main 初始化序列调用)
+ * GPIO 初始化 + 任务启动 (main 初始化序列调用)
  * ================================================================ */
 void dio_start(void)
 {
@@ -137,7 +134,7 @@ void dio_start(void)
 		HAL_GPIO_Init(di_pins[i].port, &io);
 	}
 
-	/* DO/LED: 推挽输出, 初始低 (Zephyr GPIO_OUTPUT_INACTIVE) */
+	/* DO/LED: 推挽输出, 初始低 */
 	io.Mode = GPIO_MODE_OUTPUT_PP;
 	io.Pull = GPIO_NOPULL;
 	io.Speed = GPIO_SPEED_FREQ_LOW;

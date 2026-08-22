@@ -2,7 +2,7 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * 调试 shell (USART1, 与日志同一串口) — Zephyr 版 SHELL 的最小对应物。
+ * 调试 shell (USART1, 与日志同一串口)。
  *
  * 接收路径: 寄存器级 RXNE 中断 -> 环形缓冲 -> shell 任务行编辑
  * (回显/退格/CRLF 收敛/左右移动光标/插入删除/上下翻历史/Tab 补全)。
@@ -14,7 +14,7 @@
  *
  * 命令集:
  *   help / tasks / reboot / io <子命令>   (Tab 补全, 上下文感知)
- * io 子命令对齐 Zephyr 版 src/shell.c, 写路径复用 io_write_holding /
+ * io 子命令写路径复用 io_write_holding /
  * io_write_do_bit, 与 Modbus/Web(HTTP/WS)/UDP 副作用一致:
  *   io                  -- IO/配置总览
  *   io info             -- 版本/MAC/IP/链路/RS485/CAN 基本信息
@@ -277,7 +277,7 @@ static void cmd_reboot(void)
 	set_reboot_status(true); /* 心跳任务轮询 -> history_sync -> 冷重启 */
 }
 
-/* ==================== io 子命令 (对齐 Zephyr src/shell.c) ==================== */
+/* ==================== io 子命令 ==================== */
 
 static void cmd_io_info(void)
 {
@@ -309,7 +309,7 @@ static void cmd_io_info(void)
 	log_line("uptime  : %u s",
 		 (unsigned)(xTaskGetTickCount() / configTICK_RATE_HZ));
 
-	/* RTC 存 UTC, 显示时加时区偏移 (对齐 Zephyr 版 +8 习惯) */
+	/* RTC 存 UTC, 显示时加时区偏移 */
 	lt = (time_t)io_now_epoch() + 8LL * 3600;
 	if (gmtime_r(&lt, &tm) != NULL && tm.tm_year + 1900 >= 2020) {
 		(void)strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S",

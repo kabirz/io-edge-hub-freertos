@@ -30,8 +30,6 @@ void lfs_heap_free(void *p)
 }
 #endif
 
-/* 对齐 Zephyr 版 (fs_littlefs.c +littlefs 默认): read 16 / prog 16 /
- * cache 1024 / lookahead 32 / cycles 512 / block 4096 */
 #define PORT_BLOCK_SIZE 4096u
 #define PORT_READ_SIZE  16u
 #define PORT_PROG_SIZE  16u
@@ -96,7 +94,7 @@ static int lf_erase(const struct lfs_config *c, lfs_block_t block)
     const struct io_flash *f = c->context;
 
     /* 每次擦除喂狗: 格式化全分区在真 NOR 上可达分钟级, 不能让 IWDG 中途复位
-     * 造成文件系统半损坏 (Zephyr 版同款防护) */
+     * 造成文件系统半损坏 */
     watchdog_feed();
     if (block >= PORT_BLOCKS) return LFS_ERR_IO;
     return f->erase(block_addr(block, 0), PORT_BLOCK_SIZE) == 0 ? 0 : LFS_ERR_IO;
@@ -133,7 +131,7 @@ int lfs_port_mount(lfs_t *lfs, const struct io_flash *flash)
     rc = lfs_mount(lfs, &port_cfg);
     if (rc != 0) {
         /* 任何挂载失败都格式化一次: 脏分区/半擦除分区返回的不只是
-         * ENODEV, 逐个判断会漏场景 (Zephyr 版注释原文同此) */
+         * ENODEV, 逐个判断会漏场景 */
         watchdog_feed();
         rc = lfs_format(lfs, &port_cfg);
         watchdog_feed();

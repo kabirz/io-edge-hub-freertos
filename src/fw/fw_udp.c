@@ -2,7 +2,7 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * UDP 固件升级通道 (Zephyr libs/udp_fw_upgrade 协议的 FreeRTOS 移植):
+ * UDP 固件升级通道:
  *   0x01 FW_START [size LE32][keyhash 32B?] -> [01][status][v2_chunk LE16]
  *   0x02 FW_DATA  [data<=511]               -> [02][offset LE32]
  *   0x03 FW_END   [test u8][crc LE16]       -> [03][ok]
@@ -40,7 +40,7 @@ void mcuboot_assert_fail(int line)
 }
 
 #define FW_Q_DEPTH 8u
-#define FW_DATA_MAX 511u /* legacy 停等块 (对齐 Zephyr UDP_CHUNK_SIZE) */
+#define FW_DATA_MAX 511u /* legacy 停等块 */
 #define FW_V2_CHUNK 1400u
 /* DATA_V2 帧: [offset 4B][data <=1400] (不含 cmd 字节) */
 #define FW_V2_MAX (4u + FW_V2_CHUNK)

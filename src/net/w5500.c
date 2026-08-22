@@ -2,7 +2,7 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * W5500 网络层 (Zephyr 版 W5500 驱动的 FreeRTOS 移植, target-only):
+ * W5500 网络层 (target-only):
  *   - SPI2 轮询 (21 MHz 模式 0) 实现 ioLibrary 回调: CRIS 临界区 /
  *     CS 逐操作 / 字节读写 / 突发读写 (HAL_SPI_Transmit/Receive)
  *   - RST PD0 硬复位时序: 低 >= 50ms -> 高 -> 等 50ms 稳定
@@ -10,7 +10,7 @@
  *     dns=0.0.0.0); PHY 软件配置 10/100 全双工自协商
  *   - socket 池: 0-3 固定 (UDP 配置 + Modbus TCP), 4-7 空闲供二期
  *   - 500ms 链路监控任务 (prio 4, 栈 256 字): 下降沿 DO 全灭
- *     (update_holding_reg + mb_set_do, 对齐 Zephyr NET_EVENT_IF_DOWN 行为)
+ *     (update_holding_reg + mb_set_do)
  *
  * 并发: 每次寄存器访问 (CS 拉低到拉高整段) 在 ioLibrary 的 CRIS 临界
  * 区内完成 (taskENTER_CRITICAL 屏蔽抢占, 无阻塞调用), Modbus 任务与
@@ -181,8 +181,7 @@ static void net_mon_task(void *arg)
 			LOG_INF("net link up");
 		} else if (!up && prev_up) {
 			/* 下降沿: DO 全灭 + 影子寄存器清零, 仅边沿触发
-				 * 一次 (对齐 Zephyr NET_EVENT_IF_DOWN 行为;
-				 * mb_set_do = dio.c 强实现, DO+LED 同清) */
+			 * 一次 (mb_set_do = dio.c 强实现, DO+LED 同清) */
 			w5500_macraw_set_link(false);
 			update_holding_reg(HOLDING_DO_IDX, 0);
 			mb_set_do(0);

@@ -20,7 +20,7 @@
 #include "io_time.h"
 
 /* 合法时间戳范围: [2000-01-01 00:00:00, 2100-01-01 00:00:00) 半开区间
- * (对齐 Zephyr 版: t >= TS_MAX 拒绝, 即 2100-01-01 00:00:00 本身
+ * (t >= TS_MAX 拒绝, 即 2100-01-01 00:00:00 本身
  * 非法)。超出范围的值通常是主站写入错误
  * (如只写低 16 位、高字为 0 -> 1970 年), gmtime 对部分非法输入会
  * 返回 NULL, 解引用将触发 HardFault。这里直接拒绝越界值。 */
@@ -55,7 +55,7 @@ static RTC_HandleTypeDef hrtc;
  * HAL_RTC_Init 成功, 即 hrtc.Instance 已有效) 才置位。LSE/RTC 初始化
  * 失败时 hrtc.Instance 保持 NULL, set_timestamp 若继续调
  * HAL_RTC_SetTime 将解引用 NULL -> HardFault -> 看门狗复位循环, 故
- * 前置检查本标志 (对齐 Zephyr 版 set_timestamp 的 !rtc_dev 守卫)。 */
+ * 前置检查本标志。 */
 static bool rtc_ready;
 
 /* epoch 缓存 (u32): 定时器服务任务写, 多任务读 */
@@ -124,7 +124,7 @@ bool set_timestamp(time_t t)
 		return false;
 	}
 
-	/* Zephyr 版: rtc_set_time 后 clock_settime; 本版直接更新缓存
+	/* 直接更新缓存
 	 * (1Hz 定时器在新基准上继续递增), 毫秒相位同步重拍 */
 	epoch_cache = (uint32_t)t;
 	second_tick = xTaskGetTickCount();
@@ -167,8 +167,7 @@ static bool rtc_read_epoch(uint32_t *out)
  * 备份域复位 -> LSE 起振 -> RTC 外设初始化 -> 备份域无标志时写默认
  * 时间 -> 读出 epoch 写 *out (无效日期 -> 0)。任一步失败 LOG_ERR 并
  * 返回 false (hrtc.Instance 保持 NULL, rtc_ready 不置位)。
- * LSE 失败 (无晶振/损坏) 不算致命: 放弃 RTC, epoch 留 0 (对齐 Zephyr
- * RTC 不可用时时间停在 0 的语义), 不阻断启动。 */
+ * LSE 失败 (无晶振/损坏) 不算致命: 放弃 RTC, epoch 留 0, 不阻断启动。 */
 static bool rtc_bringup(uint32_t *out)
 {
 	RCC_OscInitTypeDef osc = {0};
@@ -243,7 +242,7 @@ void io_time_init(void)
 	second_tick = xTaskGetTickCount(); /* 首个整秒前的毫秒相位 */
 
 	/* 1Hz 软件定时器递增缓存: RTC 失败时同样启动 -- epoch 从 0 自走
-	 * (对齐 Zephyr RTC 不可用时系统时钟仍自走, 仅 set_timestamp 被
+	 * (RTC 不可用时系统时钟仍自走, 仅 set_timestamp 被
 	 * rtc_ready 守卫拒绝), io_now_epoch 持续可用。本函数在 main 建
 	 * 任务前调用, xTimerStart 入队 (tmrNO_DELAY) 由调度器启动后的
 	 * 定时器服务任务执行 */

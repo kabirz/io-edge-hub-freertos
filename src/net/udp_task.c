@@ -65,7 +65,6 @@ static void udp_cfg_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     }
     udp_recv_bytes += p->tot_len;
 
-    /* 提取命令字节 (第一个字节) */
     uint8_t cmd = 0;
     pbuf_copy_partial(p, &cmd, 1, 0);
 
@@ -89,7 +88,6 @@ static void udp_cfg_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         return;
     }
 
-    /* 处理命令 */
     uint8_t rep[64];
     uint16_t rlen = udp_app_cmd(rx[0], &rx[1], (uint16_t)(copy_len - 1),
                                  rep, sizeof(rep));
@@ -97,7 +95,6 @@ static void udp_cfg_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         return; /* 未知命令静默 */
     }
 
-    /* 发送应答 */
     struct pbuf *rp = pbuf_alloc(PBUF_TRANSPORT, rlen, PBUF_RAM);
     if (rp == NULL) {
         return;

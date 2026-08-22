@@ -4,26 +4,20 @@
  *
  * CAN1 业务通道 (PA11 RX / PA12 TX, AF9)
  *
- * Zephyr 版 src/can.c + libs/can_fw_upgrade/can_fw_upgrade.c 初始化部分的
- * FreeRTOS 移植:
  *   - 波特率 = holding_reg[0x07] (reg 值即 kbps, 默认 250) 查位时序表
  *     (CAN 时钟 = PCLK1 = 42MHz), SJW=1; 非法值 (含 800k) 回落 250k
  *   - RX: 过滤器组 0 / FIFO0 / 16 位标识符掩码模式, 两组半槽:
  *     半槽 A 精确匹配业务 ID (holding_reg[0x06], 默认 0x0111),
  *     半槽 B 接收 0x100-0x1FF 段 (固件升级协议 0x101-0x107);
  *     命中帧经 can_set_rx_hook 注入消费者 (fw_can_frame_isr -> 队列
- *     -> fw 任务, 对齐 Zephyr can_fw_upgrade 库 msgq + RX 线程),
- *     未注入时静默丢弃 + 计数
+ *     -> fw 任务), 未注入时静默丢弃 + 计数
  *   - TX: mod_can_send() 发送 API (现无调用者, 现版固件无周期推送)
  *   - 波特率/ID 启动快照: 运行期写寄存器只存不生效, 重启后经
  *     config_store 应用 (与 RS485/Modbus 从站号同语义)
- *   - NART=0 自动重传 (HAL AutoRetransmission=ENABLE, 对齐 Zephyr app
- *     域默认; ONE_SHOT 仅 Zephyr boot 域使用); HAL 默认不开错误类中断
- *     (IER 仅 FMPIE0), 无 Zephyr 侧需手动屏蔽的错误中断风暴问题
+ *   - NART=0 自动重传; HAL 默认不开错误类中断 (IER 仅 FMPIE0)
  *
- * 偏差记录 (设计文档已确认):
- *   - 800kbps 不可实现: 42MHz/800k = 52.5 tq 非整数, 无整数分频组合,
- *     reg 0x07=800 视为非法回落 250k
+ * 800kbps 不可实现: 42MHz/800k = 52.5 tq 非整数, 无整数分频组合,
+ * reg 0x07=800 视为非法回落 250k。
  */
 
 #include <string.h>
@@ -37,7 +31,7 @@
 /* ==================== 板级定义 ==================== */
 
 #define CAN_IRQ_PRIO 6u /* >= configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY;
-			 * 本 ISR 无 FreeRTOS 调用, 取值仅对齐 USART2 */
+			 * 本 ISR 无 FreeRTOS 调用 */
 
 /* ==================== 位时序表 ==================== */
 
@@ -80,8 +74,7 @@ void can_set_rx_hook(void (*fn)(uint32_t id, const uint8_t *data, uint8_t dlc))
 int mod_can_send(uint32_t id, const uint8_t *data, uint8_t len)
 {
     CAN_TxHeaderTypeDef hdr = {0};
-    uint8_t buf[8] = {0}; /* HAL 固定读 8 字节, 不足补零 (对齐 Zephyr
-			   * can_frame 零初始化语义) */
+    uint8_t buf[8] = {0}; /* HAL 固定读 8 字节, 不足补零 */
     uint32_t mailbox;
     uint32_t start;
 
@@ -96,8 +89,7 @@ int mod_can_send(uint32_t id, const uint8_t *data, uint8_t len)
     hdr.DLC = len;
     hdr.TransmitGlobalTime = DISABLE;
 
-    /* 空闲邮箱等待 <=100ms (对齐 Zephyr can_send K_MSEC(100)):
-     * 忙等, 不假设调用上下文可睡眠 */
+    /* 空闲邮箱等待 <=100ms: 忙等, 不假设调用上下文可睡眠 */
     start = HAL_GetTick();
     while (HAL_CAN_GetTxMailboxesFreeLevel(&hcan1) == 0U) {
         if (HAL_GetTick() - start > 100U) {
@@ -222,7 +214,7 @@ void can_start(void)
     hcan1.Init.TimeTriggeredMode = DISABLE;
     hcan1.Init.AutoBusOff = ENABLE;      /* ABOM: bus-off 自动恢复 */
     hcan1.Init.AutoWakeUp = DISABLE;
-    hcan1.Init.AutoRetransmission = ENABLE; /* NART=0, 对齐 Zephyr app 域 */
+    hcan1.Init.AutoRetransmission = ENABLE; /* NART=0 自动重传 */
     hcan1.Init.ReceiveFifoLocked = DISABLE; /* FIFO 满时新帧覆盖旧帧 */
     hcan1.Init.TransmitFifoPriority = DISABLE;
     if (HAL_CAN_Init(&hcan1) != HAL_OK) {
@@ -236,7 +228,7 @@ void can_start(void)
     }
     if (HAL_CAN_Start(&hcan1) != HAL_OK) {
         /* 总线被显性电平占据 (典型: 上位机波特率失配) 时启动失败,
-         * 不致命 (对齐 Zephyr can_fw_upgrade: 仅损失 CAN 功能) */
+         * 不致命 (仅损失 CAN 功能) */
         LOG_ERR("can start failed (bus busy?)");
         return;
     }

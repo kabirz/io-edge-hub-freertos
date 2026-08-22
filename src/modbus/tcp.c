@@ -2,15 +2,15 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Modbus TCP 服务器 (LwIP tcp 回调模型, Zephyr 版移植; ADU 逻辑在
- * mbtcp_adu.c 主机直测, 本文件只做连接管理)。回调全在 tcpip 线程。
+ * Modbus TCP 服务器 (LwIP tcp 回调模型; ADU 逻辑在 mbtcp_adu.c
+ * 主机直测, 本文件只做连接管理)。回调全在 tcpip 线程。
  *   - 并发主站上限 2, 第 3 个连接 tcp_abort
  *   - 帧累积: 攒满 8B 头 + 6+MIN(MBAP length,256) 即完整 ADU;
  *     半帧 500ms 无进展断开
  *   - 应答单次 tcp_write (部分上位机按"一段=一帧"解析); ERR_MEM
  *     暂存到 poll 重试
  *   - 从站号启动时快照 holding_reg[0x09], 改寄存器需重启生效
- * 与 Zephyr 差异: 并发限 2 (Zephyr backlog 16); keepalive 未启用。
+ * 并发限 2; keepalive 未启用。
  */
 
 #include <stdbool.h>
@@ -256,7 +256,7 @@ static void mb_listen_init(void *arg)
 
 void mb_tcp_start(void)
 {
-	/* 启动快照: 之后改寄存器需重启生效 (Zephyr 语义) */
+	/* 启动快照: 之后改寄存器需重启生效 */
 	mb_srv_unit = (uint8_t)get_holding_reg(HOLDING_SLAVE_ID_IDX);
 	tcpip_callback(mb_listen_init, NULL); /* RAW API 须在 tcpip 线程 */
 }

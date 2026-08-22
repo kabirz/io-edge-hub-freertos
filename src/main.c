@@ -2,18 +2,16 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * io-edge-hub 主入口 (Zephyr 版 main.c + settings/init.c + 各 SYS_INIT
- * 级初始化的合并对应物):
+ * io-edge-hub 主入口:
  *   - 初始化顺序 = 设计文档 §6.2 (配置先于使用者, 存储先于历史, 网络
  *     最后): HAL/时钟 -> OS/日志/RTC -> 存储链 (NOR -> config ->
  *     littlefs -> 历史) -> IO 采样 -> CAN (波特率/ID 启动快照) -> 网络
  *     (MAC=UID 派生, IP=holding_reg) -> Modbus/UDP 任务 -> IWDG -> 心跳
  *     任务 -> 调度器
- *   - MAC: STM32 96-bit UID 折叠 + Wiznet OUI 00:08:DC (Zephyr 版
- *     derive_mac_from_uid 逐式移植)
+ *   - MAC: STM32 96-bit UID 折叠 + Wiznet OUI 00:08:DC
  *   - 失败降级不阻断启动: NOR 不在位 -> 出厂默认 + 历史停写; littlefs
  *     挂载失败 -> 历史静默丢弃; W5500 失败 -> 无链路空转本地功能
- *   - 心跳任务 = Zephyr 版 main 主循环: 喂狗 + 状态 LED 300/2700ms +
+ *   - 心跳任务: 喂狗 + 状态 LED 300/2700ms +
  *     延迟重启轮询 (sync -> 1s -> cold reboot)
  */
 
@@ -88,10 +86,9 @@ void vApplicationGetTimerTaskMemory(StaticTask_t **ppxTimerTaskTCBBuffer,
 void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 {
     (void)xTask; (void)pcTaskName;
-    NVIC_SystemReset(); /* 对齐 Zephyr k_sys_fatal_error_handler: 栈溢出 -> 热重启 */
+    NVIC_SystemReset(); /* 栈溢出 -> 热重启 */
 }
 
-/* 心跳 = Zephyr 版 main 主循环的对应物: 喂狗 + 状态 LED + 延迟重启轮询 */
 static void heartbeat_task(void *arg)
 {
     (void)arg;
@@ -106,7 +103,7 @@ static void heartbeat_task(void *arg)
         HAL_GPIO_WritePin(STATUS_LED_PORT, STATUS_LED_PIN, GPIO_PIN_RESET);
         vTaskDelay(pdMS_TO_TICKS(2700));
 
-        if (get_reboot_status()) { /* 对齐 Zephyr 主循环: sync 后延时重启 */
+        if (get_reboot_status()) { /* sync 后延时重启 */
             LOG_INF("delayed reboot");
             history_sync();
             io_reboot_cold(); /* 内含 100ms 延时 */
@@ -126,7 +123,7 @@ static StaticTask_t hb_tcb;
  * 阶段任何进出临界区的 FreeRTOS API (互斥锁创建/队列/日志锁) 都会让
  * vPortExitCritical 的 nesting==0 判断永假, BASEPRI 停在 0x50 --
  * TIM7 tick (优先级 15) 等中断被永久屏蔽, HAL_Delay 死循环。初始化
- * 挪到调度器后即恢复正常的临界区语义 (对齐 Zephyr 版 main-as-thread) */
+ * 挪到调度器后即恢复正常的临界区语义 */
 static StackType_t boot_stack[1024];
 static StaticTask_t boot_tcb;
 
@@ -154,8 +151,7 @@ static time_t hist_clock_fn(void)
 
 /* ================================================================
  * MAC 派生: STM32 96-bit UID 折叠为唯一 MAC (前 3B = Wiznet OUI)
- * (Zephyr main.c derive_mac_from_uid 逐式移植; 非 static -- shell
- * io info 复用同一派生)
+ * (非 static -- shell io info 复用同一派生)
  * ================================================================ */
 void derive_mac_from_uid(uint8_t *mac)
 {
@@ -168,12 +164,12 @@ void derive_mac_from_uid(uint8_t *mac)
     mac[3] = uid[0] ^ uid[3] ^ uid[6] ^ uid[9];
     mac[4] = uid[1] ^ uid[4] ^ uid[7] ^ uid[10];
     mac[5] = uid[2] ^ uid[5] ^ uid[8] ^ uid[11];
-    /* Zephyr 版 hwinfo 读取失败回退 01:02:03; UID_BASE 为恒存在的唯一
+    /* UID_BASE 为恒存在的唯一
      * ID 存储器映射, 无读取失败路径, 回退分支不再需要 */
 }
 
 /* ================================================================
- * 网络初始化 (Zephyr net_init 对应物): UID MAC + 静态 IP + 链路等待
+ * 网络初始化: UID MAC + 静态 IP + 链路等待
  * ================================================================ */
 static void net_setup(void)
 {
@@ -195,7 +191,7 @@ static void net_setup(void)
             ip[i] = def_ip[i];
         }
     }
-    /* 网关 = IP 前三段 + 末段改 1 (Zephyr 语义) */
+    /* 网关 = IP 前三段 + 末段改 1 */
     gw[0] = ip[0];
     gw[1] = ip[1];
     gw[2] = ip[2];
@@ -210,7 +206,7 @@ static void net_setup(void)
             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     LOG_INF("IP: %u.%u.%u.%u/24", ip[0], ip[1], ip[2], ip[3]);
 
-    /* 链路等待 <=5s (Zephyr: k_sem_take(net_link_sem, 5s) 超时继续)。
+    /* 链路等待 <=5s。
      * 轮询 PHYCFGR.LNK, 100ms x 50 = 5s 上限, 超时 WRN 继续。
      * boot_task 上下文中调度器已运行, HAL_Delay 由 tick 驱动正常。 */
     for (i = 0; i < 50 && (getPHYCFGR() & PHYCFGR_LNK_ON) == 0; i++) {
@@ -239,7 +235,6 @@ static void boot_task(void *arg)
     nor_lock = xSemaphoreCreateMutexStatic(&nor_lock_cb);
     w25qxx_set_bus_lock(nor_lock_take, nor_lock_give);
 
-    /* 开机 banner (对齐 Zephyr main: 构建时间/板名/容量/版本) */
     LOG_INF("build time: %s %s", __DATE__, __TIME__);
     LOG_INF("board: %s, clk: %dMHz", "io_edge_f407vet6",
             (int)(SystemCoreClock / 1000000u));
@@ -259,7 +254,7 @@ static void boot_task(void *arg)
     holding_reg_load();
 
 
-    /* 时间戳影子寄存器刷新 (Zephyr settings/init.c 的 load 后步骤) */
+    /* 时间戳影子寄存器刷新 */
     now = io_now_epoch();
     update_holding_reg(HOLDING_TIMESTAMP_HI_IDX, (uint16_t)(now >> 16));
     update_holding_reg(HOLDING_TIMESTAMP_LO_IDX, (uint16_t)now);

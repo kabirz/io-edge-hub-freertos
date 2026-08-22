@@ -5,7 +5,6 @@
  * 固件升级核心实现。CRC16-CCITT 为 Zephyr sys/crc.h crc16_ccitt
  * 逐式移植 (反射, poly 0x1021, init 0), 与上位机 firmware_upgrade.py
  * 一致; 终检以"读回 slot1 实际内容"计算 (兼验证编程结果)。
- * TLV 解析对齐 Zephyr ws_io.c fw_upg_verify_keyhash。
  */
 
 #include <string.h>
@@ -67,7 +66,7 @@ static void lock_take(void) {}
 static void lock_give(void) {}
 #endif
 
-/* ==================== CRC16-CCITT (Zephyr crc16_ccitt 逐式移植) ==================== */
+/* ==================== CRC16-CCITT ==================== */
 
 static uint16_t crc16_ccitt(uint16_t seed, const uint8_t *src, uint32_t len)
 {
@@ -268,8 +267,8 @@ int fw_upg_finish_ex(uint16_t crc_expect, bool check_crc)
         goto out;
     }
 
-    /* 读回 CRC 校验 (64B 块累加); CAN 紧急通道协议无 CRC 字段
-     * (对齐 Zephyr can_fw_upgrade), 完整性由 MCUboot 验签兜底 */
+    /* 读回 CRC 校验 (64B 块累加); CAN 紧急通道协议无 CRC 字段,
+     * 完整性由 MCUboot 验签兜底 */
     if (check_crc) {
         uint16_t crc = 0;
         uint8_t buf[READ_CHUNK];

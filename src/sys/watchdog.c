@@ -20,7 +20,7 @@ static IWDG_HandleTypeDef hiwdg;
 
 void watchdog_init(void)
 {
-	/* 调试器挂起时冻结 IWDG (对齐 Zephyr WDT_OPT_PAUSE_HALTED_BY_DBG) */
+	/* 调试器挂起时冻结 IWDG */
 	__HAL_DBGMCU_FREEZE_IWDG();
 
 	hiwdg.Instance = IWDG;

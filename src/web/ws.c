@@ -2,7 +2,7 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * WebSocket 实时通道实现 (Zephyr 版 ws_io.c 的 FreeRTOS 移植):
+ * WebSocket 实时通道实现:
  *
  * 推送帧 (JSON 文本, web_cmds.c 构造器自带 "t" 标记):
  *   io / regs 1s 周期 (httpd poll 回调驱动), info 10s 周期,
@@ -244,10 +244,9 @@ static int b64_decode(const char *src, uint32_t len, uint8_t *dst,
 
 /* ==================== CRC16 (fw 数据帧累加) ==================== */
 
-/* Zephyr crc16_ccitt 逐式 (反射 nibble, poly 0x8408 --
- * zephyr/subsys/crc/crc16_sw.c)。须与 fw_upg.c 内部累加一致:
+/* CRC16-CCITT (反射, poly 0x8408)。须与 fw_upg.c 内部累加一致:
  * fw_end 传入的接收侧 CRC 与固件侧读回 CRC 对比, 算法不一致则
- * 恒 mismatch (41372ae 对齐 fw_upg.c 时本函数漏改, 致 WS 升级失败) */
+ * 恒 mismatch */
 static uint16_t ws_crc16(uint16_t seed, const uint8_t *src, uint32_t len)
 {
     while (len-- > 0) {
@@ -421,7 +420,7 @@ static void ws_fw_task(void *arg)
             uint32_t got = fw_upg_received();
 
             if (got == 0u) {
-                fw_upg_abort(); /* 预检失败也要复位会话 (Zephyr 语义) */
+                fw_upg_abort(); /* 预检失败也要复位会话 */
                 snprintf(rep, sizeof(rep),
                          "{\"ok\":false,\"err\":\"no data\"}");
             } else if (got != fw_upg_total()) {
@@ -458,7 +457,7 @@ static void ws_handle_cmd(const char *cmd, size_t len)
         json_get_i32(cmd, len, "index", &index) &&
         json_get_i32(cmd, len, "value", &value)) {
         if (web_cmd_exec_do(index, value) == 0) {
-            /* do 命令回改变后的完整 IO 快照 (Zephyr 语义) */
+            /* do 命令回改变后的完整 IO 快照 */
             int n = web_build_io_json(ws.tx, sizeof(ws.tx));
 
             ws_send(0x1u, (const uint8_t *)ws.tx, (uint32_t)n);

@@ -2,23 +2,18 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Modbus TCP ADU 层 (Zephyr 版 src/modbus/tcp.c handle_client() 的
- * 从零移植, 分支顺序逐条对齐):
+ * Modbus TCP ADU 层处理顺序:
  *
  *   1. MBAP 解析: trans_id be16@0 / proto_id be16@2 / length be16@4 /
  *      unit_id@6 / fc@7; length 钳制 MIN(len, 256) - 2 = PDU data 长度。
- *      Zephyr 在钳制后还有 length>缓冲区 的复核, 因钳制上限恒小于
- *      缓冲区而是死代码 -- 移植为只在 proto!=0 时失败。
  *   2. proto_id != 0 -> 不进解码器, 直接回 server-failure ADU
- *      (modbus_raw_set_server_failure: fc|0x80 + data[0]=0x04 + len=1,
- *      proto 回显请求原始值 (Zephyr 同款, 错误的 proto 一并回显),
- *      trans/unit 回显)。注意: 先于 unit 判定, 广播帧 (unit=0) 的
- *      proto 错误同样应答 (Zephyr 同序)。
- *   3. unit != 0 -> 改写为 srv_unit 后提交 (Zephyr 用于绕过 server
- *      内部 unit 匹配; 本移植 mb_server 不校验 unit, 改写仅为对齐);
- *      应答 unit 恒回填请求原始 unit, 不暴露内部改写。
+ *      (fc|0x80 + data[0]=0x04 + len=1, 错误的 proto 原样回显,
+ *      trans/unit 回显)。先于 unit 判定: 广播帧 (unit=0) 的 proto
+ *      错误同样应答。
+ *   3. unit != 0 -> 提交解码; 应答 unit 恒回填请求原始 unit,
+ *      不暴露内部改写。
  *   4. unit == 0 (广播) -> 副作用照常执行 (mb_server 被调用), 但不
- *      产生任何响应; 上报 MB_DIAG_NO_RESP (对应 Zephyr 广播不应答路径)。
+ *      产生任何响应; 上报 MB_DIAG_NO_RESP。
  *   5. mb_server 静默丢弃 (PDU 长度违例) -> 返回 0, 上报
  *      MB_DIAG_NO_RESP; bus/srv 计数解码器入口已计, 不重复。
  *   6. 应答: MBAP 头 + PDU 写入同一缓冲, 传输层单次 send()
@@ -31,10 +26,9 @@
 #include "mb_server.h"
 #include "io_bytes.h"
 
-/* MODBUS_EXC_SERVER_DEVICE_FAILURE (modbus_raw_set_server_failure) */
 #define MB_EXC_SERVER_DEVICE_FAILURE 0x04
 
-/* Zephyr CONFIG_MODBUS_BUFFER_SIZE: length 字段钳制上限 */
+/* length 字段钳制上限 */
 #define MBTCP_MBAP_LEN_CLAMP 256u
 
 /* 帧内偏移 */
@@ -69,8 +63,8 @@ int mbtcp_adu_process(const uint8_t *in, uint16_t in_len,
 	unit_id = in[MBTCP_OFF_UNIT_ID];
 	fc = in[MBTCP_OFF_FC];
 
-	/* 2. proto_id != 0: server-failure 应答 (先于广播判定, Zephyr 同序);
-	 *    proto 回显请求原始值 (Zephyr modbus_raw_set_server_failure 同款) */
+	/* 2. proto_id != 0: server-failure 应答 (先于广播判定);
+	 *    proto 回显请求原始值 */
 	if (proto_id != 0) {
 		io_put_be16(trans_id, &out[MBTCP_OFF_TRANS_ID]);
 		io_put_be16(proto_id, &out[MBTCP_OFF_PROTO_ID]);
@@ -83,9 +77,8 @@ int mbtcp_adu_process(const uint8_t *in, uint16_t in_len,
 	}
 
 	/* 1. length 钳制 MIN(mbap_len, 256) - 2 -> PDU data 长度;
-	 * fc 单独计入 -> PDU (fc+data) 总长。mbap_len < 2 时 Zephyr 有
-	 * `if (adu->length >= 2)` 守卫不会下溢, 此处同款守卫 (按 1 字节
-	 * PDU 仅 fc 处理 -> 长度违例静默)。 */
+	 *    fc 单独计入 -> PDU (fc+data) 总长。mbap_len < 2 时按 1 字节
+	 *    PDU (仅 fc) 处理 -> 长度违例静默。 */
 	if (mbap_len > MBTCP_MBAP_LEN_CLAMP) {
 		mbap_len = MBTCP_MBAP_LEN_CLAMP;
 	}
@@ -96,10 +89,9 @@ int mbtcp_adu_process(const uint8_t *in, uint16_t in_len,
 		pdu_len = (uint16_t)(in_len - MBTCP_OFF_FC);
 	}
 
-	/* 3. unit 改写: mb_server 不校验 unit, 仅与 Zephyr 行为对齐;
-	 * 应答 unit 恒为请求原始值, 见下方 out[6] 回填 */
+	/* 3. 应答 unit 恒为请求原始值, 见下方 out[6] 回填 */
 	rsp_len = pdu_len; /* PDU 先写进 out+7, 应答头随后原地回填 */
-	(void)srv_unit;    /* 改写在解码器无 unit 概念后为文档性行为 */
+	(void)srv_unit;    /* mb_server 不校验 unit, 参数未用 */
 
 	/* 4./5. 解码: 广播帧同样进入 (副作用执行), 静默与否随后判定 */
 	bool rsp = mb_server_process(&in[MBTCP_OFF_FC], pdu_len,
