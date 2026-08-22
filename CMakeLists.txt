@@ -342,6 +342,7 @@ target_link_libraries(app.elf PRIVATE
     HAL::STM32::F4::FLASHEx
     STM32::F407xx
     STM32::NoSys
+    STM32::Nano
 )
 stm32_generate_hex_file(app.elf)
 stm32_generate_binary_file(app.elf)
@@ -542,6 +543,7 @@ target_link_libraries(boot.elf PRIVATE
     HAL::STM32::F4::FLASHEx # HAL_FLASHEx_Erase (intflash 扇区擦除)
     STM32::F407xx
     STM32::NoSys
+    STM32::Nano
 )
 gen_ld_script(boot.elf boot 0x8000000 64K)
 stm32_generate_hex_file(boot.elf)

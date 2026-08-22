@@ -12,6 +12,9 @@
 
 void mcuboot_assert_fail(int line);
 
+/* newlib <assert.h> 若已被引入 (nano 头链), 先撤掉其定义避免重定义告警 */
+#undef assert
+
 #ifdef NDEBUG
 #define assert(expr) ((void)0)
 #else

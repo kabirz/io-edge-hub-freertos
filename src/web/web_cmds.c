@@ -2,8 +2,8 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Web 命令执行器 + 共享 JSON 构造器 (Zephyr 版移植, httpd.c 与后续
- * WS 推送共用)。写路径与 Modbus 回调共用 io_write_* (副作用同 FC05/FC06);
+ * Web 命令执行器 + 共享 JSON 构造器 (httpd.c 与 WS 推送共用)。
+ * 写路径与 Modbus 回调共用 io_write_* (副作用同 FC05/FC06);
  * 重启寄存器拦截为 set_reboot_status 延迟重启, 保住 HTTP 应答。
  */
 
@@ -153,18 +153,32 @@ int web_cmd_exec_cfg(const char *json, size_t len, const char **err)
 	int32_t v;
 
 	if (json_get_str(json, len, "ip", ip_str, sizeof(ip_str))) {
-		unsigned int a, b, c, d;
+		/* 四段点分十进制 (等价 sscanf "%u.%u.%u.%u", 尾部多余
+		 * 字符忽略; 手工解析避免拖入 newlib scanf) */
+		unsigned int oct[4];
+		const char *p = ip_str;
+		int ok = 1;
 
-		if (sscanf(ip_str, "%u.%u.%u.%u", &a, &b, &c, &d) != 4 || a > 255 ||
-		    b > 255 || c > 255 || d > 255 ||
-		    !ip_addr_valid((uint8_t)a, (uint8_t)b, (uint8_t)c, (uint8_t)d)) {
+		for (int i = 0; i < 4; i++) {
+			char *e;
+			unsigned long v = strtoul(p, &e, 10);
+
+			if (e == p || v > 255 || (i < 3 && *e != '.')) {
+				ok = 0;
+				break;
+			}
+			oct[i] = (unsigned int)v;
+			p = e + 1;
+		}
+		if (!ok || !ip_addr_valid((uint8_t)oct[0], (uint8_t)oct[1],
+					  (uint8_t)oct[2], (uint8_t)oct[3])) {
 			*err = e_bad_ip;
 			return -1;
 		}
-		io_write_holding(HOLDING_IP_OCTET1_IDX, (uint16_t)a);
-		io_write_holding(HOLDING_IP_OCTET2_IDX, (uint16_t)b);
-		io_write_holding(HOLDING_IP_OCTET3_IDX, (uint16_t)c);
-		io_write_holding(HOLDING_IP_OCTET4_IDX, (uint16_t)d);
+		io_write_holding(HOLDING_IP_OCTET1_IDX, (uint16_t)oct[0]);
+		io_write_holding(HOLDING_IP_OCTET2_IDX, (uint16_t)oct[1]);
+		io_write_holding(HOLDING_IP_OCTET3_IDX, (uint16_t)oct[2]);
+		io_write_holding(HOLDING_IP_OCTET4_IDX, (uint16_t)oct[3]);
 	}
 
 	if (json_get_i32(json, len, "rs485", &v)) { /* 1200..115200 */

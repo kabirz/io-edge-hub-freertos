@@ -2,7 +2,7 @@
  * Copyright (c) 2026 Kabirz.
  * SPDX-License-Identifier: Apache-2.0
  *
- * HTTP/1.1 服务器 (端口 80): gzip SPA + REST API, Zephyr 版 web 的移植。
+ * HTTP/1.1 服务器 (端口 80): gzip SPA + REST API。
  * 回调全在 tcpip 线程; 响应按 tcp_sndbuf 分片 ACK 驱动发送 (在途
  * <= 4*MSS); 下载分块独立持 hist_lock, 不阻塞采样落盘。
  * /ws 升级握手在本文件识别, 会话移交 ws.c (单连接, 推送/命令/固件升级)。
@@ -197,7 +197,6 @@ static void pump_file(struct http_conn *c)
 {
 	u16_t mss = tcp_mss(c->pcb);
 
-	/* 响应头 */
 	while (c->hdr_sent < c->hdr_len) {
 		u16_t snd = tcp_sndbuf(c->pcb);
 
@@ -230,7 +229,7 @@ static void pump_file(struct http_conn *c)
 	while (c->written - c->acked < (uint32_t)(4u * mss)) {
 		if (c->dl_chunk_off == c->dl_chunk_len) {
 			if (c->dl_sent >= c->dl_size) {
-				break; /* 全部读完 */
+				break;
 			}
 			uint32_t want = c->dl_size - c->dl_sent;
 
@@ -389,7 +388,7 @@ static void dispatch(struct http_conn *c, const char *method, const char *path,
 		int n = history_web_list_json(c->body_buf, sizeof(c->body_buf));
 
 		if (n < 0) {
-			/* fs 未挂载: 空列表 (与 Zephyr 版语义一致) */
+			/* fs 未挂载: 回空列表 */
 			static const char empty[] = "{\"files\":[]}";
 
 			respond_mem(c, "200 OK", "application/json",
@@ -530,6 +529,42 @@ static const char *hdr_find(const char *line_start, uint16_t hdr_len, const char
 	return NULL;
 }
 
+/* 请求行拆分, 等价 sscanf("%7s %95s"): 跳过前导空白取两词, 各截断到
+ * 目标容量; 返回匹配到的词数。手工解析避免拖入 newlib scanf (~11KB) */
+static int split_req_line(const char *in, char *a, size_t asz, char *b,
+			  size_t bsz)
+{
+	size_t n = 0;
+
+	while (*in == ' ' || *in == '\t' || *in == '\r' || *in == '\n') {
+		in++;
+	}
+	while (*in != '\0' && *in != ' ' && *in != '\t' && *in != '\r' &&
+	       *in != '\n') {
+		if (n < asz - 1) {
+			a[n++] = *in;
+		}
+		in++;
+	}
+	a[n] = '\0';
+	if (n == 0) {
+		return 0;
+	}
+	while (*in == ' ' || *in == '\t' || *in == '\r' || *in == '\n') {
+		in++;
+	}
+	n = 0;
+	while (*in != '\0' && *in != ' ' && *in != '\t' && *in != '\r' &&
+	       *in != '\n') {
+		if (n < bsz - 1) {
+			b[n++] = *in;
+		}
+		in++;
+	}
+	b[n] = '\0';
+	return n > 0 ? 2 : 1;
+}
+
 static void http_process_rx(struct http_conn *c)
 {
 	for (;;) {
@@ -554,7 +589,8 @@ static void http_process_rx(struct http_conn *c)
 			char method[8] = {0};
 			char target[96] = {0};
 
-			if (sscanf(c->rx, "%7s %95s", method, target) != 2) {
+			if (split_req_line(c->rx, method, sizeof(method),
+					   target, sizeof(target)) != 2) {
 				respond_json_err(c, "400 Bad Request", "bad request");
 				conn_pump(c);
 				if (c->pcb != NULL) {
@@ -649,7 +685,8 @@ static void http_process_rx(struct http_conn *c)
 			char method[8] = {0};
 			char target[96] = {0};
 
-			(void)sscanf(c->rx, "%7s %95s", method, target);
+			(void)split_req_line(c->rx, method, sizeof(method),
+					     target, sizeof(target));
 			char *q = strchr(target, '?');
 			const char *query = NULL;
 
