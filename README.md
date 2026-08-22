@@ -46,7 +46,7 @@ src/
   io/                   DI/DO/ADC 采样
   web/                  HTTP 服务器 / WebSocket 实时通道 / 升级 UI 页面
   include/              对外头文件
-tests/                  主机 (Windows/WSL) 单元测试, 12 个目标, ctest
+tests/                  主机单元测试 (12 个 ctest 目标) + e2e/ 设备深度测试 (pytest)
 tools/                  签名/升级/烧录 python 工具 (见下)
 deps/                   子模块: stm32-cmake / FreeRTOS-Kernel / littlefs /
                         ioLibrary(W5500) / STM32CubeF4 / mcuboot(bootutil
@@ -157,6 +157,27 @@ wsl -e bash -c "cd /mnt/c/Users/jxwaz/code/io-edge-hub-freertos \
 
 11 个测试目标全部通过为基线 (MSVC 与 GCC 双编译器均通过);
 加入 fw_upg 核心测试后为 **12 个**。
+
+## 设备 e2e 深度测试 (pytest)
+
+`tests/e2e/` 面向真实设备, 覆盖基础连通 / 功能 / 压力三层
+(HTTP+WS / FTP / Modbus TCP+RTU / UDP 配置与固件升级 / 历史记录 /
+重启换机 / 串口 shell), 共 90 项。IP、串口等参数外部指定:
+
+```bat
+pip install -r tests\e2e\requirements.txt
+python -m pytest tests\e2e -m basic                &REM 连通冒烟 (~3s)
+python -m pytest tests\e2e -m functional           &REM 功能 (~1min)
+python -m pytest tests\e2e -m stress               &REM 压力 (~90s)
+python -m pytest tests\e2e --ip 192.168.12.101 --serial COM9
+```
+
+常用选项: `--ip` 设备地址 (默认 192.168.12.101), `--src-ip` 绑定
+物理网卡 (默认自动取同网段地址, 绕开本机 TUN 代理), `--serial`
+日志/串口 (默认 COM9, 空串禁用), `--rs485-port` USB-RS485 (RTU 测试,
+不给则跳过), `--fw-image` 升级测试镜像 (默认 build\app.signed.bin)。
+标记: `basic/functional/stress/serial/rtu/reboot/upgrade` — 其中
+`reboot` 会真实重启设备、`upgrade` 会完整走一遍 MCUboot 换机。
 
 ## MCUboot 双镜像与分区布局
 
